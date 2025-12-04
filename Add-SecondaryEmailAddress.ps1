@@ -113,10 +113,9 @@ try {
                 continue
             }
 
-            # Add the new email address
+            # Add the new email address (using Add operation for safety)
             if ($PSCmdlet.ShouldProcess($displayName, "Add email address $newEmailAddress")) {
-                $mailbox.EmailAddresses += $newEmailAddress
-                Set-Mailbox -Identity $mailbox.Identity -EmailAddresses $mailbox.EmailAddresses -ErrorAction Stop
+                Set-Mailbox -Identity $mailbox.Identity -EmailAddresses @{Add=$newEmailAddress} -ErrorAction Stop
 
                 Write-Host "  [SUCCESS] Added: $newEmailAddress" -ForegroundColor Green
                 $processedCount++
