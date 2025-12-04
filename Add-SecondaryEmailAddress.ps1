@@ -113,20 +113,40 @@ try {
                 continue
             }
 
-            # Add the new email address (using Add operation for safety)
+            # Add the new email address
+            # Note: We must read all addresses and write them back because Exchange in production
+            # may run in ConstrainedLanguage mode which doesn't support @{Add=...} syntax
             if ($PSCmdlet.ShouldProcess($displayName, "Add email address $newEmailAddress")) {
-                Set-Mailbox -Identity $mailbox.Identity -EmailAddresses @{Add=$newEmailAddress} -ErrorAction Stop
+                try {
+                    # Get current addresses (fresh read to avoid stale data)
+                    $currentMailbox = Get-Mailbox -Identity $mailbox.Identity -ErrorAction Stop
+                    $allAddresses = [System.Collections.ArrayList]::new()
 
-                Write-Host "  [SUCCESS] Added: $newEmailAddress" -ForegroundColor Green
-                $processedCount++
+                    # Copy existing addresses to new collection
+                    foreach ($addr in $currentMailbox.EmailAddresses) {
+                        [void]$allAddresses.Add($addr.ToString())
+                    }
 
-                $results += [PSCustomObject]@{
-                    DisplayName      = $displayName
-                    Alias           = $alias
-                    PrimaryEmail    = $primaryEmail
-                    NewEmailAddress = $newEmailAddress
-                    Status          = "Success"
-                    Timestamp       = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                    # Add the new address
+                    [void]$allAddresses.Add($newEmailAddress)
+
+                    # Write all addresses back (atomic operation)
+                    Set-Mailbox -Identity $currentMailbox.Identity -EmailAddresses $allAddresses -ErrorAction Stop
+
+                    Write-Host "  [SUCCESS] Added: $newEmailAddress" -ForegroundColor Green
+                    $processedCount++
+
+                    $results += [PSCustomObject]@{
+                        DisplayName      = $displayName
+                        Alias           = $alias
+                        PrimaryEmail    = $primaryEmail
+                        NewEmailAddress = $newEmailAddress
+                        Status          = "Success"
+                        Timestamp       = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                    }
+                }
+                catch {
+                    throw  # Re-throw to be caught by outer catch block
                 }
             }
         }
