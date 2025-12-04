@@ -5,7 +5,11 @@
 .DESCRIPTION
     This script finds all on-premises Exchange mailboxes that have Email Address Policy
     disabled (EmailAddressPolicyEnabled = $false) and adds an additional email address
-    in the format: alias@fortenova.mail.onmicrosoft.com
+    using the specified domain suffix.
+
+.PARAMETER DomainSuffix
+    The domain suffix to use for new email addresses (e.g., @company.mail.onmicrosoft.com).
+    This parameter is mandatory.
 
 .PARAMETER WhatIf
     Shows what would happen if the script runs without actually making changes.
@@ -14,25 +18,27 @@
     Prompts for confirmation before making changes.
 
 .EXAMPLE
-    .\Add-FortenovaEmailAddresses.ps1
+    .\Add-SecondaryEmailAddress.ps1 -DomainSuffix "@company.mail.onmicrosoft.com"
 
-    Runs the script and adds email addresses to all qualifying mailboxes.
+    Adds email addresses in format alias@company.mail.onmicrosoft.com to all qualifying mailboxes.
 
 .EXAMPLE
-    .\Add-FortenovaEmailAddresses.ps1 -WhatIf
+    .\Add-SecondaryEmailAddress.ps1 -DomainSuffix "@custom.onmicrosoft.com" -WhatIf
 
     Shows what changes would be made without actually making them.
 
 .NOTES
     Author: PowerShell Script
-    Date: 2025-12-03
+    Date: 2025-12-04
     Requires: Exchange Management Shell
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter()]
-    [string]$DomainSuffix = "@fortenova.mail.onmicrosoft.com",
+    [Parameter(Mandatory = $true, HelpMessage = "Enter domain suffix (e.g., @company.mail.onmicrosoft.com)")]
+    [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')]
+    [string]$DomainSuffix,
 
     [Parameter()]
     [switch]$SkipExisting
