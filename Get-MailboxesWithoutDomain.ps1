@@ -152,14 +152,13 @@ try {
         $hasTargetDomain = $false
 
         foreach ($address in $mailbox.EmailAddresses) {
-            # Provjeri SMTP adrese (smtp: i SMTP:)
-            if ($address -is [string] -and $address -match '^(smtp|SMTP):(.+)@(.+)$') {
-                $emailDomain = $Matches[3].ToLower()
+            # Konvertuj ProxyAddress objekat u string
+            $addressString = $address.ToString()
 
-                if ($emailDomain -eq $targetDomain) {
-                    $hasTargetDomain = $true
-                    break
-                }
+            # Provjeri sve SMTP adrese (smtp: i SMTP:)
+            if ($addressString -like "smtp:*@$targetDomain" -or $addressString -like "SMTP:*@$targetDomain") {
+                $hasTargetDomain = $true
+                break
             }
         }
 
