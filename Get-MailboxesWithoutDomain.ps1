@@ -46,7 +46,7 @@
     - Odgovarajuće Exchange admin dozvole
 
     Autor: PowerShell Script
-    Verzija: 1.0
+    Verzija: 1.1
 #>
 
 [CmdletBinding()]
@@ -68,8 +68,13 @@ param(
     [switch]$IncludeEquipment
 )
 
-# Funkcija za provjeru konekcije na Exchange
+#region Functions
+
 function Test-ExchangeConnection {
+    <#
+    .SYNOPSIS
+        Provjera konekcije na Exchange
+    #>
     try {
         $null = Get-Command Get-Mailbox -ErrorAction Stop
         return $true
@@ -79,7 +84,10 @@ function Test-ExchangeConnection {
     }
 }
 
-# Glavna skripta
+#endregion
+
+#region Main Script
+
 try {
     Write-Host "`n========================================" -ForegroundColor Cyan
     Write-Host "Mailbox Domain Filter Analyzer" -ForegroundColor Cyan
@@ -90,40 +98,40 @@ try {
     if (-not (Test-ExchangeConnection)) {
         throw "Nije uspostavljena konekcija na Exchange. Molimo pokrenite Exchange Management Shell ili se konektujte sa Connect-ExchangeOnline."
     }
-    Write-Host "✓ Konekcija uspješna`n" -ForegroundColor Green
+    Write-Host "Konekcija uspjesna`n" -ForegroundColor Green
 
     # Normalizuj domenu (ukloni @ ako postoji)
     $targetDomain = $Domain.TrimStart('@').ToLower()
-    Write-Host "Tražim mailboxe BEZ adresa na domeni: @$targetDomain`n" -ForegroundColor Cyan
+    Write-Host "Trazim mailboxe BEZ adresa na domeni: @$targetDomain`n" -ForegroundColor Cyan
 
     # Pripremi filter za tipove mailboxova
     $recipientTypeDetails = @('UserMailbox')
 
     if ($IncludeShared) {
         $recipientTypeDetails += 'SharedMailbox'
-        Write-Host "  • Uključujem Shared mailboxe" -ForegroundColor Gray
+        Write-Host "  Ukljucujem Shared mailboxe" -ForegroundColor Gray
     }
     if ($IncludeRoom) {
         $recipientTypeDetails += 'RoomMailbox'
-        Write-Host "  • Uključujem Room mailboxe" -ForegroundColor Gray
+        Write-Host "  Ukljucujem Room mailboxe" -ForegroundColor Gray
     }
     if ($IncludeEquipment) {
         $recipientTypeDetails += 'EquipmentMailbox'
-        Write-Host "  • Uključujem Equipment mailboxe" -ForegroundColor Gray
+        Write-Host "  Ukljucujem Equipment mailboxe" -ForegroundColor Gray
     }
 
-    Write-Host "`nUčitavam mailboxe..." -ForegroundColor Yellow
+    Write-Host "`nUcitavam mailboxe..." -ForegroundColor Yellow
 
     # Učitaj sve mailboxe
     $allMailboxes = @()
     foreach ($type in $recipientTypeDetails) {
-        Write-Host "  Učitavam $type..." -ForegroundColor Gray
+        Write-Host "  Ucitavam $type..." -ForegroundColor Gray
         $mailboxes = Get-Mailbox -RecipientTypeDetails $type -ResultSize Unlimited -ErrorAction Stop
         $allMailboxes += $mailboxes
     }
 
     $totalCount = $allMailboxes.Count
-    Write-Host "✓ Učitano $totalCount mailboxova`n" -ForegroundColor Green
+    Write-Host "Ucitano $totalCount mailboxova`n" -ForegroundColor Green
 
     # Filtriraj mailboxe koji NEMAJU adresu na target domeni
     Write-Host "Analiziram email adrese..." -ForegroundColor Yellow
@@ -178,7 +186,7 @@ try {
     Write-Host "========================================`n" -ForegroundColor Cyan
 
     $foundCount = $mailboxesWithoutDomain.Count
-    Write-Host "Pronađeno: $foundCount mailboxa BEZ adrese na @$targetDomain" -ForegroundColor $(if ($foundCount -gt 0) { "Yellow" } else { "Green" })
+    Write-Host "Pronadjeno: $foundCount mailboxa BEZ adrese na @$targetDomain" -ForegroundColor $(if ($foundCount -gt 0) { "Yellow" } else { "Green" })
     Write-Host "Ukupno analizirano: $totalCount mailboxova`n" -ForegroundColor Gray
 
     if ($foundCount -gt 0) {
@@ -191,11 +199,11 @@ try {
         if ($ExportToCsv) {
             Write-Host "`nExportujem rezultate..." -ForegroundColor Yellow
             $mailboxesWithoutDomain | Export-Csv -Path $ExportToCsv -NoTypeInformation -Encoding UTF8
-            Write-Host "✓ Export završen: $ExportToCsv" -ForegroundColor Green
+            Write-Host "Export zavrsen: $ExportToCsv" -ForegroundColor Green
         }
 
         # Detaljan prikaz (opciono)
-        Write-Host "`nŽelite li vidjeti detaljne informacije za sve mailboxe? (y/n): " -ForegroundColor Cyan -NoNewline
+        Write-Host "`nZelite li vidjeti detaljne informacije za sve mailboxe? (y/n): " -ForegroundColor Cyan -NoNewline
         $response = Read-Host
 
         if ($response -eq 'y' -or $response -eq 'Y') {
@@ -204,14 +212,16 @@ try {
         }
     }
     else {
-        Write-Host "✓ Svi mailboxes imaju bar jednu adresu na @$targetDomain domeni!" -ForegroundColor Green
+        Write-Host "Svi mailboxes imaju bar jednu adresu na @$targetDomain domeni!" -ForegroundColor Green
     }
 
     Write-Host "`n========================================`n" -ForegroundColor Cyan
 }
 catch {
-    Write-Host "`n✗ GREŠKA: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "`nGRESKA: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "`nStack Trace:" -ForegroundColor Red
     Write-Host $_.ScriptStackTrace -ForegroundColor Red
     exit 1
 }
+
+#endregion
