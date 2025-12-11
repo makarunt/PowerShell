@@ -120,13 +120,15 @@ function Get-MigrationDurationInfo {
         [object]$MigrationUser,
 
         [Parameter(Mandatory = $false)]
-        [datetime]$BatchCreationTime,
+        [AllowNull()]
+        [Nullable[datetime]]$BatchCreationTime,
 
         [Parameter(Mandatory = $false)]
         [object]$BatchStatus,
 
         [Parameter(Mandatory = $false)]
-        [datetime]$BatchLastSyncedDateTime
+        [AllowNull()]
+        [Nullable[datetime]]$BatchLastSyncedDateTime
     )
 
     # Ako je batch completed, koristi batch status umjesto user statusa (koji moze biti pogresan)
