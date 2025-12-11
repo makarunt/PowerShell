@@ -188,12 +188,22 @@ function Get-MigrationDurationInfo {
     $result.CurrentDuration = $currentDuration
     $result.CurrentDurationFormatted = Format-Duration -Duration $currentDuration
 
+    # Provjeri status - moze biti broj (4) ili tekst ('Completed')
+    $isCompleted = ($MigrationUser.PercentageComplete -eq 100) -or
+                   ($MigrationUser.Status -eq 'Completed') -or
+                   ($MigrationUser.Status -eq 4) -or
+                   ($MigrationUser.Status.Value -eq 4)
+
     # Ako je migracija zavrsena (100% ili Completed status)
-    if ($MigrationUser.PercentageComplete -eq 100 -or $MigrationUser.Status -eq 'Completed') {
+    if ($isCompleted) {
         $result.TotalDuration = $currentDuration
         $result.TotalDurationFormatted = Format-Duration -Duration $currentDuration
-        $result.TimeTo95Percent = $currentDuration * (95 / 100)
+
+        # Izracunaj vrijeme do 95% - TimeSpan ne moze se mnoziti direktno!
+        $minutesTo95 = $currentDuration.TotalMinutes * (95.0 / 100.0)
+        $result.TimeTo95Percent = [timespan]::FromMinutes($minutesTo95)
         $result.TimeTo95PercentFormatted = Format-Duration -Duration $result.TimeTo95Percent
+
         $result.IsReadyForFinalization = $true
         $result.Message = "[OK] Zavrseno - ukupno trajanje"
         return $result
@@ -205,7 +215,11 @@ function Get-MigrationDurationInfo {
 
         # Izracunaj vrijeme do 95% na osnovu trenutnog postotka
         $currentPercent = [Math]::Max($MigrationUser.PercentageComplete, 1)
-        $timeTo95 = $currentDuration * (95 / $currentPercent)
+
+        # TimeSpan ne moze se mnoziti direktno - koristimo minute!
+        $minutesTo95 = $currentDuration.TotalMinutes * (95.0 / $currentPercent)
+        $timeTo95 = [timespan]::FromMinutes($minutesTo95)
+
         $result.TimeTo95Percent = $timeTo95
         $result.TimeTo95PercentFormatted = Format-Duration -Duration $timeTo95
 
