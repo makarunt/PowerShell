@@ -174,13 +174,44 @@ function Get-MigrationDurationInfo {
         return $result
     }
 
-    # Odredi zavrsno vrijeme
+    # Odredi zavrsno vrijeme - VAZNO: za completed migracije koristiti stvarno vrijeme zavrsetka!
     $endTime = Get-Date
-    if ($MigrationUser.CompletionDateTime) {
-        $endTime = $MigrationUser.CompletionDateTime
+
+    # Za completed migracije, trazi razlicite properties koji oznacavaju zavrsno vrijeme
+    $isCompleted = ($MigrationUser.PercentageComplete -eq 100) -or
+                   ($MigrationUser.Status -eq 'Completed') -or
+                   ($MigrationUser.Status -eq 4) -or
+                   ($MigrationUser.Status.Value -eq 4)
+
+    if ($isCompleted) {
+        # Za zavrsene migracije, pokusaj razlicite sources za completion time
+        if ($MigrationUser.CompletionDateTime) {
+            $endTime = $MigrationUser.CompletionDateTime
+        }
+        elseif ($MigrationUser.FinalizationDateTime) {
+            $endTime = $MigrationUser.FinalizationDateTime
+        }
+        elseif ($MigrationUser.LastSuccessfulSyncTime) {
+            $endTime = $MigrationUser.LastSuccessfulSyncTime
+        }
+        elseif ($MigrationUser.LastSyncedDateTime) {
+            $endTime = $MigrationUser.LastSyncedDateTime
+        }
+        else {
+            # Ako nista drugo, koristi Report ako postoji
+            if ($MigrationUser.Report -and $MigrationUser.Report.Entries) {
+                $lastEntry = $MigrationUser.Report.Entries | Sort-Object Date -Descending | Select-Object -First 1
+                if ($lastEntry -and $lastEntry.Date) {
+                    $endTime = $lastEntry.Date
+                }
+            }
+        }
     }
-    elseif ($MigrationUser.LastSyncedDateTime) {
-        $endTime = $MigrationUser.LastSyncedDateTime
+    else {
+        # Za migracije u toku, koristi Last synced ili sada
+        if ($MigrationUser.LastSyncedDateTime) {
+            $endTime = $MigrationUser.LastSyncedDateTime
+        }
     }
 
     # Izracunaj trenutno trajanje
@@ -188,12 +219,7 @@ function Get-MigrationDurationInfo {
     $result.CurrentDuration = $currentDuration
     $result.CurrentDurationFormatted = Format-Duration -Duration $currentDuration
 
-    # Provjeri status - moze biti broj (4) ili tekst ('Completed')
-    $isCompleted = ($MigrationUser.PercentageComplete -eq 100) -or
-                   ($MigrationUser.Status -eq 'Completed') -or
-                   ($MigrationUser.Status -eq 4) -or
-                   ($MigrationUser.Status.Value -eq 4)
-
+    # Koristi vec setovanu $isCompleted varijablu (setovana gore)
     # Ako je migracija zavrsena (100% ili Completed status)
     if ($isCompleted) {
         $result.TotalDuration = $currentDuration
@@ -273,13 +299,28 @@ function Get-StatusText {
         6 = 'Queued'
     }
 
+    # Pokusaj izvuci integer vrijednost iz razlicitih formata
+    $statusValue = $null
+
     if ($Status -is [int]) {
-        if ($statusMap.ContainsKey($Status)) {
-            return $statusMap[$Status]
-        }
+        $statusValue = $Status
+    }
+    elseif ($Status.Value -ne $null) {
+        # Status je objekt sa .Value property
+        $statusValue = $Status.Value
+    }
+    elseif ($Status -is [string]) {
+        # Ako je vec string, vrati ga
+        return $Status
     }
 
-    return $Status
+    # Ako imamo integer vrijednost, mapiraj ga
+    if ($statusValue -ne $null -and $statusMap.ContainsKey($statusValue)) {
+        return $statusMap[$statusValue]
+    }
+
+    # Fallback - vrati original
+    return $Status.ToString()
 }
 
 # Glavna skripta
