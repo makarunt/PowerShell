@@ -120,13 +120,29 @@ function Get-MigrationDurationInfo {
         [object]$MigrationUser,
 
         [Parameter(Mandatory = $false)]
-        [datetime]$BatchCreationTime
+        [datetime]$BatchCreationTime,
+
+        [Parameter(Mandatory = $false)]
+        [object]$BatchStatus,
+
+        [Parameter(Mandatory = $false)]
+        [datetime]$BatchLastSyncedDateTime
     )
+
+    # Ako je batch completed, koristi batch status umjesto user statusa (koji moze biti pogresan)
+    $effectiveStatus = $MigrationUser.Status
+    if ($BatchStatus) {
+        $batchStatusText = Get-StatusText -Status $BatchStatus
+        if ($batchStatusText -eq 'Completed' -and $MigrationUser.PercentageComplete -eq 100) {
+            # Override: batch je completed i mailbox je 100%, koristi batch status
+            $effectiveStatus = $BatchStatus
+        }
+    }
 
     $result = [PSCustomObject]@{
         Identity                = $MigrationUser.Identity
         BatchId                 = $MigrationUser.BatchId
-        Status                  = $MigrationUser.Status
+        Status                  = $effectiveStatus
         PercentageComplete      = if ($MigrationUser.PercentageComplete) { $MigrationUser.PercentageComplete } else { 0 }
         StartDate               = $MigrationUser.StartDate
         InitialSyncDateTime     = $MigrationUser.InitialSyncDateTime
@@ -178,14 +194,22 @@ function Get-MigrationDurationInfo {
     $endTime = Get-Date
 
     # Za completed migracije, trazi razlicite properties koji oznacavaju zavrsno vrijeme
+    # Provjeri i effectiveStatus (koji ukljucuje batch status override)
     $isCompleted = ($MigrationUser.PercentageComplete -eq 100) -or
+                   ($effectiveStatus -eq 'Completed') -or
+                   ($effectiveStatus -eq 4) -or
+                   ($effectiveStatus.Value -eq 4) -or
                    ($MigrationUser.Status -eq 'Completed') -or
                    ($MigrationUser.Status -eq 4) -or
                    ($MigrationUser.Status.Value -eq 4)
 
     if ($isCompleted) {
         # Za zavrsene migracije, pokusaj razlicite sources za completion time
-        if ($MigrationUser.CompletionDateTime) {
+        # PRIORITET: BatchLastSyncedDateTime (ako je batch completed)
+        if ($BatchLastSyncedDateTime) {
+            $endTime = $BatchLastSyncedDateTime
+        }
+        elseif ($MigrationUser.CompletionDateTime) {
             $endTime = $MigrationUser.CompletionDateTime
         }
         elseif ($MigrationUser.FinalizationDateTime) {
@@ -384,8 +408,19 @@ try {
         if ($batch.CreationDateTime) {
             Write-Host "  Created: $($batch.CreationDateTime.ToString('dd.MM.yyyy HH:mm:ss'))"
 
-            # Izracunaj batch trajanje
-            $batchDuration = (Get-Date) - $batch.CreationDateTime
+            # Izracunaj batch trajanje - za completed batch koristi LastSyncedDateTime!
+            $batchStatusText = Get-StatusText -Status $batch.Status
+            $batchIsCompleted = ($batchStatusText -eq 'Completed') -or ($batch.Status -eq 'Completed') -or ($batch.Status -eq 4) -or ($batch.Status.Value -eq 4)
+
+            $batchEndTime = Get-Date
+            if ($batchIsCompleted -and $batch.LastSyncedDateTime) {
+                $batchEndTime = $batch.LastSyncedDateTime
+            }
+            elseif ($batch.LastSyncedDateTime) {
+                $batchEndTime = $batch.LastSyncedDateTime
+            }
+
+            $batchDuration = $batchEndTime - $batch.CreationDateTime
             Write-Host "  Batch traje: $(Format-Duration -Duration $batchDuration)" -ForegroundColor Cyan
         }
 
@@ -416,7 +451,12 @@ try {
             }
 
             # Izracunaj vrijeme do 95%
-            $migrationData = Get-MigrationDurationInfo -MigrationUser $userStats -BatchCreationTime $batch.CreationDateTime
+            # Proslijedi batch status i batch LastSyncedDateTime za tocnije rezultate
+            $migrationData = Get-MigrationDurationInfo `
+                -MigrationUser $userStats `
+                -BatchCreationTime $batch.CreationDateTime `
+                -BatchStatus $batch.Status `
+                -BatchLastSyncedDateTime $batch.LastSyncedDateTime
             $allResults += $migrationData
 
             # Prikazuj osnovne informacije
