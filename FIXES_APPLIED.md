@@ -1,13 +1,39 @@
 # Exchange Documentation Script - Fixes Applied
 
-**Version:** 3.1 (Fixed)
-**Date:** 2026-01-21
+**Version:** 3.1.1 (Encoding Fixed)
+**Date:** 2026-01-23
+**Previous Version:** 3.1 (Fixed) - 2026-01-21
 **Original Script:** Exchange-Documentation-Script-Enhanced.ps1
 **Fixed Script:** Exchange-Documentation-Script-Fixed.ps1
 
 ---
 
-## 🔴 CRITICAL FIXES APPLIED
+## 🔧 ENCODING FIX (v3.1.1 - 2026-01-23)
+
+**Problem:** Emoji characters in v3.1 caused PowerShell parse errors on Windows:
+```
+Unexpected token 'Š' in expression or statement.
+The '<' operator is reserved for future use.
+```
+
+**Root Cause:** UTF-8 encoding without BOM causes Windows PowerShell to misinterpret Unicode emoji characters.
+
+**Solution Applied:**
+- Replaced all emoji characters with text equivalents:
+  - 📊 → `[STATS]`
+  - 🚨 → `[ALERT]`
+  - ✅ → `[OK]`
+  - ⚠️ → `[WARNING]`
+  - ▶ → `>`
+  - ▼ → `v`
+- File is now pure ASCII (no special Unicode characters)
+- Compatible with all PowerShell versions (Windows PowerShell 5.1 and PowerShell 7+)
+
+**Impact:** Script now runs without parse errors on Windows PowerShell.
+
+---
+
+## 🔴 CRITICAL FIXES APPLIED (v3.1)
 
 ### 1. **Fixed Connect-ExchangeOnline UPN Construction Bug** (Line 167)
 **Problem:** Invalid UPN construction when using TenantId

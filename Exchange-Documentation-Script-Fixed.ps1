@@ -1245,8 +1245,8 @@ function Export-ToHTML {
             var content = element.nextElementSibling;
             content.classList.toggle('show');
             element.textContent = content.classList.contains('show') ?
-                element.textContent.replace('▶', '▼') :
-                element.textContent.replace('▼', '▶');
+                element.textContent.replace('>', 'v') :
+                element.textContent.replace('v', '>');
         }
 
         function expandAll() {
@@ -1256,7 +1256,7 @@ function Export-ToHTML {
                 content.classList.add('show');
             });
             buttons.forEach(function(button) {
-                button.textContent = button.textContent.replace('▶', '▼');
+                button.textContent = button.textContent.replace('>', 'v');
             });
         }
 
@@ -1267,7 +1267,7 @@ function Export-ToHTML {
                 content.classList.remove('show');
             });
             buttons.forEach(function(button) {
-                button.textContent = button.textContent.replace('▼', '▶');
+                button.textContent = button.textContent.replace('v', '>');
             });
         }
     </script>
@@ -1302,33 +1302,33 @@ function Export-ToHTML {
             }
 
             if ($expiredCerts -and $expiredCerts.Count -gt 0) {
-                $criticalAlerts += "🚨 CRITICAL: $($expiredCerts.Count) expired certificate(s) found"
+                $criticalAlerts += "[ALERT] CRITICAL: $($expiredCerts.Count) expired certificate(s) found"
             }
             if ($expiringSoonCerts -and $expiringSoonCerts.Count -gt 0) {
-                $criticalAlerts += "⚠️ WARNING: $($expiringSoonCerts.Count) certificate(s) expiring within 30 days"
+                $criticalAlerts += "[WARNING] WARNING: $($expiringSoonCerts.Count) certificate(s) expiring within 30 days"
             }
         }
     }
 
     # Check for errors during collection
     if ($Script:ErrorLog.Count -gt 0) {
-        $criticalAlerts += "⚠️ $($Script:ErrorLog.Count) error(s) occurred during data collection"
+        $criticalAlerts += "[WARNING] $($Script:ErrorLog.Count) error(s) occurred during data collection"
     }
 
     if ($criticalAlerts.Count -gt 0) {
-        $htmlContent += "<div class='critical-box'><h3>🚨 Critical Alerts</h3><ul>"
+        $htmlContent += "<div class='critical-box'><h3>[ALERT] Critical Alerts</h3><ul>"
         foreach ($alert in $criticalAlerts) {
             $htmlContent += "<li>$alert</li>"
         }
         $htmlContent += "</ul></div>"
     } else {
-        $htmlContent += "<div class='success-box'><h3>✅ No Critical Issues Detected</h3><p>All checks passed successfully.</p></div>"
+        $htmlContent += "<div class='success-box'><h3>[OK] No Critical Issues Detected</h3><p>All checks passed successfully.</p></div>"
     }
 
     # Add summary statistics if available
     $hasStats = $Script:ReportData.ContainsKey("MailboxStatistics") -or $Script:ReportData.ContainsKey("EXO_MailboxStatistics")
     if ($hasStats) {
-        $htmlContent += "<h2>📊 Summary Statistics</h2><div class='summary-stats'>"
+        $htmlContent += "<h2>[STATS] Summary Statistics</h2><div class='summary-stats'>"
 
         if ($Script:ReportData.ContainsKey("MailboxStatistics")) {
             $stats = $Script:ReportData["MailboxStatistics"]
@@ -1372,8 +1372,8 @@ function Export-ToHTML {
     # Add expand/collapse all buttons
     $htmlContent += @"
     <div style="text-align: center; margin: 20px 0;">
-        <button class="expand-all-btn" onclick="expandAll()">▼ Expand All Sections</button>
-        <button class="collapse-all-btn" onclick="collapseAll()">▶ Collapse All Sections</button>
+        <button class="expand-all-btn" onclick="expandAll()">v Expand All Sections</button>
+        <button class="collapse-all-btn" onclick="collapseAll()">> Collapse All Sections</button>
     </div>
 "@
 
@@ -1395,11 +1395,11 @@ function Export-ToHTML {
         $isCritical = $false
         if ($category -eq "ExchangeCertificates" -and $criticalAlerts.Count -gt 0) {
             $envClass = "critical"
-            $envBadge += "<span class='environment-badge badge-critical'>⚠️ Critical</span>"
+            $envBadge += "<span class='environment-badge badge-critical'>[WARNING] Critical</span>"
             $isCritical = $true
         }
 
-        $htmlContent += "<button class='collapsible $envClass' onclick='toggleContent(this)'>▶ $displayName $envBadge</button>"
+        $htmlContent += "<button class='collapsible $envClass' onclick='toggleContent(this)'>> $displayName $envBadge</button>"
         $htmlContent += "<div class='content'>"
 
         if ($data -and (($data -is [Array] -and $data.Count -gt 0) -or ($data -isnot [Array]))) {
@@ -1464,7 +1464,7 @@ function Export-ToHTML {
 
     # Add error log section if there were errors
     if ($Script:ErrorLog.Count -gt 0) {
-        $htmlContent += "<h2>⚠️ Error Log</h2>"
+        $htmlContent += "<h2>[WARNING] Error Log</h2>"
         $htmlContent += "<div class='warning-box'>"
         $htmlContent += "<p>The following errors occurred during data collection:</p>"
         $htmlContent += "<table><thead><tr><th>Timestamp</th><th>Category</th><th>Description</th><th>Error Message</th></tr></thead><tbody>"
@@ -1617,18 +1617,18 @@ function Start-ExchangeDocumentation {
                     }
 
                     if ($expiredCerts -and $expiredCerts.Count -gt 0) {
-                        Write-Host "🚨 CRITICAL: $($expiredCerts.Count) expired certificate(s) found!" -ForegroundColor Red
+                        Write-Host "[ALERT] CRITICAL: $($expiredCerts.Count) expired certificate(s) found!" -ForegroundColor Red
                         Write-Host "   Review the 'ExchangeCertificates' section in the HTML report" -ForegroundColor Red
                     }
                     if ($expiringSoonCerts -and $expiringSoonCerts.Count -gt 0) {
-                        Write-Host "⚠️  WARNING: $($expiringSoonCerts.Count) certificate(s) expiring within 30 days!" -ForegroundColor Yellow
+                        Write-Host "[WARNING]  WARNING: $($expiringSoonCerts.Count) certificate(s) expiring within 30 days!" -ForegroundColor Yellow
                         Write-Host "   Review the 'ExchangeCertificates' section in the HTML report" -ForegroundColor Yellow
                     }
                 }
             }
 
             if ($Script:ErrorLog.Count -gt 0) {
-                Write-Host "`n⚠️  $($Script:ErrorLog.Count) error(s) occurred during data collection." -ForegroundColor Yellow
+                Write-Host "`n[WARNING]  $($Script:ErrorLog.Count) error(s) occurred during data collection." -ForegroundColor Yellow
                 Write-Host "   Review the 'Error Log' section in the HTML report for details" -ForegroundColor Yellow
             }
 
