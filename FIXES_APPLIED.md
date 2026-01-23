@@ -1,10 +1,52 @@
 # Exchange Documentation Script - Fixes Applied
 
-**Version:** 3.1.1 (Encoding Fixed)
+**Version:** 3.1.2 (Logging Enhanced)
 **Date:** 2026-01-23
-**Previous Version:** 3.1 (Fixed) - 2026-01-21
+**Previous Versions:**
+- 3.1.1 (Encoding Fixed) - 2026-01-23
+- 3.1 (Fixed) - 2026-01-21
+
 **Original Script:** Exchange-Documentation-Script-Enhanced.ps1
 **Fixed Script:** Exchange-Documentation-Script-Fixed.ps1
+
+---
+
+## 🔍 LOGGING ENHANCEMENT (v3.1.2 - 2026-01-23)
+
+**Problem:** Virtual directory collection took 10+ minutes with no feedback, causing users to think the script was hanging.
+
+**Root Cause:** The virtual directory collection section queries 8 different cmdlets (OWA, ECP, ActiveSync, EWS, OAB, Autodiscover, MAPI, PowerShell) sequentially with no progress indication.
+
+**Solution Applied:**
+- Added detailed progress logging for each virtual directory type
+- Shows which specific type is being collected in real-time
+- Displays count of items found for each type
+- Shows total elapsed time for the entire virtual directory collection
+- Changed error handling from silent to visible (with yellow warnings)
+
+**Example Output:**
+```
+2026-01-23 07:58:56: Collecting Virtual Directories (OWA, EWS, ActiveSync, etc.)
+  -> Collecting OWA virtual directories...
+     Found 2 OWA virtual directory(ies)
+  -> Collecting ECP (Exchange Control Panel) virtual directories...
+     Found 2 ECP virtual directory(ies)
+  -> Collecting ActiveSync virtual directories...
+     Found 2 ActiveSync virtual directory(ies)
+  -> Collecting EWS (Exchange Web Services) virtual directories...
+     Found 2 EWS virtual directory(ies)
+  -> Collecting OAB (Offline Address Book) virtual directories...
+     Found 2 OAB virtual directory(ies)
+  -> Collecting Autodiscover virtual directories...
+     Found 2 Autodiscover virtual directory(ies)
+  -> Collecting MAPI virtual directories...
+     Found 2 MAPI virtual directory(ies)
+  -> Collecting PowerShell virtual directories...
+     Found 2 PowerShell virtual directory(ies)
+  -> Virtual directory collection completed in 12.3 seconds. Total: 16 virtual directories
+```
+
+**Impact:** Users can now see real-time progress and identify which cmdlet is slow or hanging.
 
 ---
 

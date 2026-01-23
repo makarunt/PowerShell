@@ -61,9 +61,9 @@
     .\Exchange-Documentation-Script-Fixed.ps1 -Environment Online -AppId "12345678-1234-1234-1234-123456789012" -CertificateThumbprint "ABC123..." -TenantId "contoso.onmicrosoft.com"
 
 .NOTES
-    Version: 3.1 (Fixed)
+    Version: 3.1.2 (Logging Enhanced)
     Author: Exchange Admin Team
-    Last Modified: 2026-01-21
+    Last Modified: 2026-01-23
 
     Security Recommendations:
     - For On-Premises: Use Windows Authentication where possible (run as service account)
@@ -548,67 +548,119 @@ function Get-ExchangeOnPremisesData {
     # Virtual Directories - Critical for client connectivity
     Invoke-SafeCommand -Command {
         $vdirs = @()
+        $startTime = Get-Date
 
         # OWA Virtual Directories
         try {
-            $vdirs += Get-OwaVirtualDirectory -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            Write-Host "  -> Collecting OWA virtual directories..." -ForegroundColor Cyan
+            $owaVdirs = Get-OwaVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'OWA'}}, DefaultDomain, LogonFormat, ClientAuthCleanupLevel,
                 ExternalAuthenticationMethods, InternalAuthenticationMethods, WindowsAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
-        } catch { Write-Verbose "Could not get OWA virtual directories" }
+            $vdirs += $owaVdirs
+            Write-Host "     Found $($owaVdirs.Count) OWA virtual directory(ies)" -ForegroundColor Green
+        } catch {
+            Write-Host "     No OWA virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Verbose "Could not get OWA virtual directories: $($_.Exception.Message)"
+        }
 
         # ECP Virtual Directories
         try {
-            $vdirs += Get-EcpVirtualDirectory -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            Write-Host "  -> Collecting ECP (Exchange Control Panel) virtual directories..." -ForegroundColor Cyan
+            $ecpVdirs = Get-EcpVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'ECP'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
                 @{N='CollectedDate';E={Get-Date}}
-        } catch { Write-Verbose "Could not get ECP virtual directories" }
+            $vdirs += $ecpVdirs
+            Write-Host "     Found $($ecpVdirs.Count) ECP virtual directory(ies)" -ForegroundColor Green
+        } catch {
+            Write-Host "     No ECP virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Verbose "Could not get ECP virtual directories: $($_.Exception.Message)"
+        }
 
         # ActiveSync Virtual Directories
         try {
-            $vdirs += Get-ActiveSyncVirtualDirectory -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            Write-Host "  -> Collecting ActiveSync virtual directories..." -ForegroundColor Cyan
+            $asVdirs = Get-ActiveSyncVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'ActiveSync'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
                 ClientCertAuth, CompressionEnabled, WindowsAuthEnabled,
                 @{N='CollectedDate';E={Get-Date}}
-        } catch { Write-Verbose "Could not get ActiveSync virtual directories" }
+            $vdirs += $asVdirs
+            Write-Host "     Found $($asVdirs.Count) ActiveSync virtual directory(ies)" -ForegroundColor Green
+        } catch {
+            Write-Host "     No ActiveSync virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Verbose "Could not get ActiveSync virtual directories: $($_.Exception.Message)"
+        }
 
         # EWS Virtual Directories - CRITICAL
         try {
-            $vdirs += Get-WebServicesVirtualDirectory -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            Write-Host "  -> Collecting EWS (Exchange Web Services) virtual directories..." -ForegroundColor Cyan
+            $ewsVdirs = Get-WebServicesVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'EWS'}}, CertificateAuthentication, WSSecurityAuthentication, OAuthAuthentication,
                 ExternalAuthenticationMethods, InternalAuthenticationMethods, WindowsAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
-        } catch { Write-Verbose "Could not get EWS virtual directories" }
+            $vdirs += $ewsVdirs
+            Write-Host "     Found $($ewsVdirs.Count) EWS virtual directory(ies)" -ForegroundColor Green
+        } catch {
+            Write-Host "     No EWS virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Verbose "Could not get EWS virtual directories: $($_.Exception.Message)"
+        }
 
         # OAB Virtual Directories
         try {
-            $vdirs += Get-OabVirtualDirectory -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            Write-Host "  -> Collecting OAB (Offline Address Book) virtual directories..." -ForegroundColor Cyan
+            $oabVdirs = Get-OabVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'OAB'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
                 RequireSSL, @{N='CollectedDate';E={Get-Date}}
-        } catch { Write-Verbose "Could not get OAB virtual directories" }
+            $vdirs += $oabVdirs
+            Write-Host "     Found $($oabVdirs.Count) OAB virtual directory(ies)" -ForegroundColor Green
+        } catch {
+            Write-Host "     No OAB virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Verbose "Could not get OAB virtual directories: $($_.Exception.Message)"
+        }
 
         # Autodiscover Virtual Directories
         try {
-            $vdirs += Get-AutodiscoverVirtualDirectory -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            Write-Host "  -> Collecting Autodiscover virtual directories..." -ForegroundColor Cyan
+            $autodiscoverVdirs = Get-AutodiscoverVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'Autodiscover'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
                 WindowsAuthentication, WSSecurityAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
-        } catch { Write-Verbose "Could not get Autodiscover virtual directories" }
+            $vdirs += $autodiscoverVdirs
+            Write-Host "     Found $($autodiscoverVdirs.Count) Autodiscover virtual directory(ies)" -ForegroundColor Green
+        } catch {
+            Write-Host "     No Autodiscover virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Verbose "Could not get Autodiscover virtual directories: $($_.Exception.Message)"
+        }
 
         # MAPI Virtual Directories
         try {
-            $vdirs += Get-MapiVirtualDirectory -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            Write-Host "  -> Collecting MAPI virtual directories..." -ForegroundColor Cyan
+            $mapiVdirs = Get-MapiVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'MAPI'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
                 @{N='CollectedDate';E={Get-Date}}
-        } catch { Write-Verbose "Could not get MAPI virtual directories" }
+            $vdirs += $mapiVdirs
+            Write-Host "     Found $($mapiVdirs.Count) MAPI virtual directory(ies)" -ForegroundColor Green
+        } catch {
+            Write-Host "     No MAPI virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Verbose "Could not get MAPI virtual directories: $($_.Exception.Message)"
+        }
 
         # PowerShell Virtual Directories
         try {
-            $vdirs += Get-PowerShellVirtualDirectory -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            Write-Host "  -> Collecting PowerShell virtual directories..." -ForegroundColor Cyan
+            $psVdirs = Get-PowerShellVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'PowerShell'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
                 RequireSSL, CertificateAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
-        } catch { Write-Verbose "Could not get PowerShell virtual directories" }
+            $vdirs += $psVdirs
+            Write-Host "     Found $($psVdirs.Count) PowerShell virtual directory(ies)" -ForegroundColor Green
+        } catch {
+            Write-Host "     No PowerShell virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Verbose "Could not get PowerShell virtual directories: $($_.Exception.Message)"
+        }
+
+        $elapsed = ((Get-Date) - $startTime).TotalSeconds
+        Write-Host "  -> Virtual directory collection completed in $([Math]::Round($elapsed, 1)) seconds. Total: $($vdirs.Count) virtual directories" -ForegroundColor Green
 
         return $vdirs
     } -Description "Virtual Directories (OWA, EWS, ActiveSync, etc.)" -Category "VirtualDirectories"
