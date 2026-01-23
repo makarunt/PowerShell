@@ -1,14 +1,101 @@
 # Exchange Documentation Script - Fixes Applied
 
-**Version:** 3.1.3 (ArrayList Fixed)
+**Version:** 3.1.4 (DAG Enhanced)
 **Date:** 2026-01-23
 **Previous Versions:**
+- 3.1.3 (ArrayList Fixed) - 2026-01-23
 - 3.1.2 (Logging Enhanced) - 2026-01-23
 - 3.1.1 (Encoding Fixed) - 2026-01-23
 - 3.1 (Fixed) - 2026-01-21
 
 **Original Script:** Exchange-Documentation-Script-Enhanced.ps1
 **Fixed Script:** Exchange-Documentation-Script-Fixed.ps1
+
+---
+
+## 🏗️ DAG ENHANCEMENT (v3.1.4 - 2026-01-23)
+
+**Enhancement:** Added comprehensive Database Availability Group (DAG) documentation with enhanced properties and new data collection sections.
+
+**What Was Added:**
+
+### 1. Enhanced DAG Properties Collection
+Added missing critical DAG properties:
+- **Name** - DAG name
+- **Servers** - List of member servers (fixed ArrayList)
+- **DatacenterActivationMode** - DAC mode setting
+- **DatabaseAvailabilityGroupIpAddresses** - DAG IP addresses (fixed ArrayList)
+- **WitnessServer** - Witness server FQDN
+- **WitnessDirectory** - Witness directory path
+- **AlternateWitnessServer** - Alternate witness server FQDN
+- **AlternateWitnessDirectory** - Alternate witness directory path
+
+**Fixed ArrayList properties:**
+```powershell
+@{N='Servers';E={$_.Servers -join '; '}}
+@{N='DatabaseAvailabilityGroupIpAddresses';E={$_.DatabaseAvailabilityGroupIpAddresses -join '; '}}
+```
+
+### 2. NEW: Database Availability Group Networks Collection
+Added new section to collect DAG network configurations:
+- **Identity** - Network identity (e.g., DAG01\MapiDagNetwork)
+- **ReplicationEnabled** - Whether replication is enabled on this network
+- **Subnets** - List of subnets assigned to the network
+- **DAGName** - Parent DAG name for reference
+
+**Collection Method:**
+```powershell
+Get-DatabaseAvailabilityGroupNetwork -Identity $dag.Name
+```
+
+### 3. NEW: Database Activation Preferences Report
+Added comprehensive database activation preference report showing:
+- **DatabaseName** - Name of the mailbox database
+- **MailboxServer** - Server hosting the database copy
+- **ActivationPreference** - Activation preference number (1 = primary, 2+ = secondary)
+- **AutoActivationPolicy** - Auto mount dial setting (Lossless, GoodAvailability, etc.)
+- **Status** - Current copy status (Healthy, Mounted, Failed, etc.)
+- **ContentIndexState** - Search index state
+- **CopyQueueLength** - Number of logs waiting to be copied
+- **ReplayQueueLength** - Number of logs waiting to be replayed
+
+**Use Cases:**
+- Identify which server has primary activation preference for each database
+- Verify activation preference configurations
+- Check database copy health and replication status
+- Plan database failovers and maintenance
+
+**Example Output:**
+```
+DatabaseName: DB01
+MailboxServer: EXCH-MBX01
+ActivationPreference: 1
+AutoActivationPolicy: GoodAvailability
+Status: Healthy
+ContentIndexState: Healthy
+CopyQueueLength: 0
+ReplayQueueLength: 0
+
+DatabaseName: DB01
+MailboxServer: EXCH-MBX02
+ActivationPreference: 2
+AutoActivationPolicy: GoodAvailability
+Status: Healthy
+ContentIndexState: Healthy
+CopyQueueLength: 0
+ReplayQueueLength: 0
+```
+
+**Impact:**
+- Complete DAG visibility for high availability planning
+- Network configuration documentation for troubleshooting
+- Activation preference mapping for failover planning
+- Replication health monitoring data
+
+**Categories Added:**
+- `DatabaseAvailabilityGroups` (enhanced)
+- `DatabaseAvailabilityGroupNetworks` (new)
+- `DatabaseActivationPreferences` (new)
 
 ---
 

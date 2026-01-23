@@ -61,7 +61,7 @@
     .\Exchange-Documentation-Script-Fixed.ps1 -Environment Online -AppId "12345678-1234-1234-1234-123456789012" -CertificateThumbprint "ABC123..." -TenantId "contoso.onmicrosoft.com"
 
 .NOTES
-    Version: 3.1.3 (ArrayList Fixed)
+    Version: 3.1.4 (DAG Enhanced)
     Author: Exchange Admin Team
     Last Modified: 2026-01-23
 
@@ -484,11 +484,65 @@ function Get-ExchangeOnPremisesData {
 
     # Database Availability Groups with detailed configuration
     Invoke-SafeCommand -Command {
-        Get-DatabaseAvailabilityGroup -ErrorAction SilentlyContinue | Select-Object Name, Servers,
-        WitnessServer, WitnessDirectory, AlternateWitnessServer, NetworkCompression, NetworkEncryption,
-        ReplicationPort, DatacenterActivationMode, ThirdPartyReplication,
+        Get-DatabaseAvailabilityGroup -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='Servers';E={$_.Servers -join '; '}},
+        DatacenterActivationMode,
+        @{N='DatabaseAvailabilityGroupIpAddresses';E={$_.DatabaseAvailabilityGroupIpAddresses -join '; '}},
+        WitnessServer, WitnessDirectory,
+        AlternateWitnessServer, AlternateWitnessDirectory,
+        NetworkCompression, NetworkEncryption, ReplicationPort, ThirdPartyReplication,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Database Availability Groups" -Category "DatabaseAvailabilityGroups"
+
+    # Database Availability Group Networks
+    Invoke-SafeCommand -Command {
+        $dagNetworks = @()
+        $dags = Get-DatabaseAvailabilityGroup -ErrorAction SilentlyContinue
+        foreach ($dag in $dags) {
+            try {
+                $networks = Get-DatabaseAvailabilityGroupNetwork -Identity $dag.Name -ErrorAction Stop
+                foreach ($network in $networks) {
+                    $dagNetworks += $network | Select-Object Identity, ReplicationEnabled,
+                        @{N='Subnets';E={$_.Subnets -join '; '}},
+                        @{N='DAGName';E={$dag.Name}},
+                        @{N='CollectedDate';E={Get-Date}}
+                }
+            }
+            catch {
+                Write-Verbose "Could not retrieve networks for DAG $($dag.Name): $($_.Exception.Message)"
+            }
+        }
+        return $dagNetworks
+    } -Description "Database Availability Group Networks" -Category "DatabaseAvailabilityGroupNetworks"
+
+    # Database Activation Preferences and Policies
+    Invoke-SafeCommand -Command {
+        $dbActivation = @()
+        $databases = Get-MailboxDatabase -ErrorAction SilentlyContinue
+        foreach ($db in $databases) {
+            try {
+                # Get database copy status for activation preference
+                $copies = Get-MailboxDatabaseCopyStatus -Identity $db.Name -ErrorAction Stop
+                foreach ($copy in $copies) {
+                    $dbActivation += [PSCustomObject]@{
+                        DatabaseName = $db.Name
+                        MailboxServer = $copy.MailboxServer
+                        ActivationPreference = $copy.ActivationPreference
+                        AutoActivationPolicy = $db.AutoDatabaseMountDial
+                        Status = $copy.Status
+                        ContentIndexState = $copy.ContentIndexState
+                        CopyQueueLength = $copy.CopyQueueLength
+                        ReplayQueueLength = $copy.ReplayQueueLength
+                        CollectedDate = Get-Date
+                    }
+                }
+            }
+            catch {
+                Write-Verbose "Could not retrieve activation preference for database $($db.Name): $($_.Exception.Message)"
+            }
+        }
+        return $dbActivation
+    } -Description "Database Activation Preferences" -Category "DatabaseActivationPreferences"
 
     # Receive Connectors - Including SMTP Relay configurations
     Invoke-SafeCommand -Command {
