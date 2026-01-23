@@ -1,8 +1,9 @@
 # Exchange Documentation Script - Fixes Applied
 
-**Version:** 3.1.4 (DAG Enhanced)
+**Version:** 3.1.5 (ArrayList Complete Fix)
 **Date:** 2026-01-23
 **Previous Versions:**
+- 3.1.4 (DAG Enhanced) - 2026-01-23
 - 3.1.3 (ArrayList Fixed) - 2026-01-23
 - 3.1.2 (Logging Enhanced) - 2026-01-23
 - 3.1.1 (Encoding Fixed) - 2026-01-23
@@ -10,6 +11,65 @@
 
 **Original Script:** Exchange-Documentation-Script-Enhanced.ps1
 **Fixed Script:** Exchange-Documentation-Script-Fixed.ps1
+
+---
+
+## 🔧 ARRAYLIST COMPLETE FIX (v3.1.5 - 2026-01-23)
+
+**Problem:** Two additional properties were still displaying "System.Collections.ArrayList":
+1. **ClientAccessService** - AutoDiscoverSiteScope
+2. **ExchangeServers** - NetworkAddress
+
+Additionally, added warning message when virtual directories collection returns empty results.
+
+**Properties Fixed:**
+
+### 1. ExchangeServers - NetworkAddress
+Network addresses were showing as ArrayList instead of readable list.
+
+**Before:**
+```
+NetworkAddress: System.Collections.ArrayList
+```
+
+**After:**
+```
+NetworkAddress: 10.0.1.100; fe80::1234:5678:90ab:cdef
+```
+
+**Fix Applied:**
+```powershell
+@{N='NetworkAddress';E={$_.NetworkAddress -join '; '}}
+```
+
+### 2. ClientAccessService - AutoDiscoverSiteScope
+Autodiscover site scope (AD sites) were showing as ArrayList.
+
+**Before:**
+```
+AutoDiscoverSiteScope: System.Collections.ArrayList
+```
+
+**After:**
+```
+AutoDiscoverSiteScope: Default-First-Site-Name; Site02
+```
+
+**Fix Applied:**
+```powershell
+@{N='AutoDiscoverSiteScope';E={$_.AutoDiscoverSiteScope -join '; '}}
+```
+
+### 3. Virtual Directories - Enhanced Debugging
+Added warning message when virtual directory collection returns zero results to help troubleshoot permissions or connectivity issues:
+```powershell
+Write-Warning "No virtual directories were collected. Check permissions and Exchange server connectivity."
+```
+
+**Impact:**
+- All ArrayList issues now resolved
+- All properties display human-readable values
+- Better visibility when virtual directory collection fails
 
 ---
 

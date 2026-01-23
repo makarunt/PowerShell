@@ -61,7 +61,7 @@
     .\Exchange-Documentation-Script-Fixed.ps1 -Environment Online -AppId "12345678-1234-1234-1234-123456789012" -CertificateThumbprint "ABC123..." -TenantId "contoso.onmicrosoft.com"
 
 .NOTES
-    Version: 3.1.4 (DAG Enhanced)
+    Version: 3.1.5 (ArrayList Complete Fix)
     Author: Exchange Admin Team
     Last Modified: 2026-01-23
 
@@ -387,7 +387,8 @@ function Get-ExchangeOnPremisesData {
     Invoke-SafeCommand -Command {
         Get-ExchangeServer | Select-Object Name, ServerRole, AdminDisplayVersion, Edition, FQDN, Site,
         IsHubTransportServer, IsClientAccessServer, IsMailboxServer, IsUnifiedMessagingServer, IsEdgeServer,
-        NetworkAddress, OrganizationalUnit, WhenCreated, WhenChanged,
+        @{N='NetworkAddress';E={$_.NetworkAddress -join '; '}},
+        OrganizationalUnit, WhenCreated, WhenChanged,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Exchange Servers" -Category "ExchangeServers"
 
@@ -742,13 +743,19 @@ function Get-ExchangeOnPremisesData {
         $elapsed = ((Get-Date) - $startTime).TotalSeconds
         Write-Host "  -> Virtual directory collection completed in $([Math]::Round($elapsed, 1)) seconds. Total: $($vdirs.Count) virtual directories" -ForegroundColor Green
 
+        # Ensure we return the array even if empty
+        if ($vdirs.Count -eq 0) {
+            Write-Warning "No virtual directories were collected. Check permissions and Exchange server connectivity."
+        }
+
         return $vdirs
     } -Description "Virtual Directories (OWA, EWS, ActiveSync, etc.)" -Category "VirtualDirectories"
 
     # Client Access Services
     Invoke-SafeCommand -Command {
         Get-ClientAccessService -ErrorAction SilentlyContinue | Select-Object Name, Server, AutoDiscoverServiceInternalUri,
-        AutoDiscoverSiteScope, AlternateServiceAccountConfiguration,
+        @{N='AutoDiscoverSiteScope';E={$_.AutoDiscoverSiteScope -join '; '}},
+        AlternateServiceAccountConfiguration,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Client Access Services" -Category "ClientAccessServices"
 
