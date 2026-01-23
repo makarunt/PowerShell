@@ -61,7 +61,7 @@
     .\Exchange-Documentation-Script-Fixed.ps1 -Environment Online -AppId "12345678-1234-1234-1234-123456789012" -CertificateThumbprint "ABC123..." -TenantId "contoso.onmicrosoft.com"
 
 .NOTES
-    Version: 3.1.2 (Logging Enhanced)
+    Version: 3.1.3 (ArrayList Fixed)
     Author: Exchange Admin Team
     Last Modified: 2026-01-23
 
@@ -492,8 +492,10 @@ function Get-ExchangeOnPremisesData {
 
     # Receive Connectors - Including SMTP Relay configurations
     Invoke-SafeCommand -Command {
-        Get-ReceiveConnector | Select-Object Identity, Server, Bindings, RemoteIPRanges, AuthMechanism,
-        PermissionGroups, MaxMessageSize, ConnectionTimeout, MaxInboundConnection, RequireTLS,
+        Get-ReceiveConnector | Select-Object Identity, Server,
+        @{N='Bindings';E={$_.Bindings -join '; '}},
+        @{N='RemoteIPRanges';E={$_.RemoteIPRanges -join '; '}},
+        AuthMechanism, PermissionGroups, MaxMessageSize, ConnectionTimeout, MaxInboundConnection, RequireTLS,
         EnableAuthGSSAPI, ExtendedProtectionPolicy, SuppressXAnonymousTls, AdvertiseClientSettings,
         Banner, Comment, Enabled, Fqdn, LongAddressesEnabled, OrarEnabled, PipeliningEnabled,
         ProtocolLoggingLevel, SizeEnabled, TarpitInterval, TransportRole,
@@ -502,7 +504,10 @@ function Get-ExchangeOnPremisesData {
 
     # Send Connectors - Including SMTP Relay configurations
     Invoke-SafeCommand -Command {
-        Get-SendConnector | Select-Object Identity, AddressSpaces, SourceTransportServers, SmartHosts,
+        Get-SendConnector | Select-Object Identity,
+        @{N='AddressSpaces';E={$_.AddressSpaces -join '; '}},
+        @{N='SourceTransportServers';E={$_.SourceTransportServers -join '; '}},
+        @{N='SmartHosts';E={$_.SmartHosts -join '; '}},
         Port, RequireTLS, SmartHostAuthMechanism, UseExternalDNSServersEnabled, MaxMessageSize,
         ConnectionInactivityTimeout, DnsRoutingEnabled, ErrorPolicies, ForceHELO, Fqdn,
         IgnoreSTARTTLS, IsScopedConnector, IsSmtpConnector, LinkedReceiveConnector, ProtocolLoggingLevel,
@@ -513,16 +518,21 @@ function Get-ExchangeOnPremisesData {
     # Transport Configuration
     Invoke-SafeCommand -Command {
         Get-TransportConfig | Select-Object MaxDumpsterSizePerDatabase, MaxDumpsterTime,
-        MaxReceiveSize, MaxSendSize, ExternalPostmasterAddress, GenerateCopyOfDSNFor,
-        InternalSMTPServers, JournalingReportNdrTo, MaxRecipientEnvelopeLimit,
+        MaxReceiveSize, MaxSendSize, ExternalPostmasterAddress,
+        @{N='GenerateCopyOfDSNFor';E={$_.GenerateCopyOfDSNFor -join '; '}},
+        @{N='InternalSMTPServers';E={$_.InternalSMTPServers -join '; '}},
+        JournalingReportNdrTo, MaxRecipientEnvelopeLimit,
         OrganizationFederatedMailbox, RedirectUnprovisionedUserMessagesTo, ShadowRedundancyEnabled,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Transport Configuration" -Category "TransportConfiguration"
 
     # Transport Rules with detailed conditions and actions
     Invoke-SafeCommand -Command {
-        Get-TransportRule | Select-Object Name, Priority, State, Mode, Description, Conditions, Actions,
-        Exceptions, Comments, RuleVersion, WhenChanged,
+        Get-TransportRule | Select-Object Name, Priority, State, Mode, Description,
+        @{N='Conditions';E={($_.Conditions | Out-String).Trim()}},
+        @{N='Actions';E={($_.Actions | Out-String).Trim()}},
+        @{N='Exceptions';E={($_.Exceptions | Out-String).Trim()}},
+        Comments, RuleVersion, WhenChanged,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Transport Rules" -Category "TransportRules"
 
@@ -555,7 +565,9 @@ function Get-ExchangeOnPremisesData {
             Write-Host "  -> Collecting OWA virtual directories..." -ForegroundColor Cyan
             $owaVdirs = Get-OwaVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'OWA'}}, DefaultDomain, LogonFormat, ClientAuthCleanupLevel,
-                ExternalAuthenticationMethods, InternalAuthenticationMethods, WindowsAuthentication,
+                @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
+                @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
+                WindowsAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
             $vdirs += $owaVdirs
             Write-Host "     Found $($owaVdirs.Count) OWA virtual directory(ies)" -ForegroundColor Green
@@ -568,7 +580,9 @@ function Get-ExchangeOnPremisesData {
         try {
             Write-Host "  -> Collecting ECP (Exchange Control Panel) virtual directories..." -ForegroundColor Cyan
             $ecpVdirs = Get-EcpVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
-                @{N='Type';E={'ECP'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
+                @{N='Type';E={'ECP'}},
+                @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
+                @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
                 @{N='CollectedDate';E={Get-Date}}
             $vdirs += $ecpVdirs
             Write-Host "     Found $($ecpVdirs.Count) ECP virtual directory(ies)" -ForegroundColor Green
@@ -581,7 +595,9 @@ function Get-ExchangeOnPremisesData {
         try {
             Write-Host "  -> Collecting ActiveSync virtual directories..." -ForegroundColor Cyan
             $asVdirs = Get-ActiveSyncVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
-                @{N='Type';E={'ActiveSync'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
+                @{N='Type';E={'ActiveSync'}},
+                @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
+                @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
                 ClientCertAuth, CompressionEnabled, WindowsAuthEnabled,
                 @{N='CollectedDate';E={Get-Date}}
             $vdirs += $asVdirs
@@ -596,7 +612,9 @@ function Get-ExchangeOnPremisesData {
             Write-Host "  -> Collecting EWS (Exchange Web Services) virtual directories..." -ForegroundColor Cyan
             $ewsVdirs = Get-WebServicesVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'EWS'}}, CertificateAuthentication, WSSecurityAuthentication, OAuthAuthentication,
-                ExternalAuthenticationMethods, InternalAuthenticationMethods, WindowsAuthentication,
+                @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
+                @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
+                WindowsAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
             $vdirs += $ewsVdirs
             Write-Host "     Found $($ewsVdirs.Count) EWS virtual directory(ies)" -ForegroundColor Green
@@ -609,7 +627,9 @@ function Get-ExchangeOnPremisesData {
         try {
             Write-Host "  -> Collecting OAB (Offline Address Book) virtual directories..." -ForegroundColor Cyan
             $oabVdirs = Get-OabVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
-                @{N='Type';E={'OAB'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
+                @{N='Type';E={'OAB'}},
+                @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
+                @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
                 RequireSSL, @{N='CollectedDate';E={Get-Date}}
             $vdirs += $oabVdirs
             Write-Host "     Found $($oabVdirs.Count) OAB virtual directory(ies)" -ForegroundColor Green
@@ -622,7 +642,9 @@ function Get-ExchangeOnPremisesData {
         try {
             Write-Host "  -> Collecting Autodiscover virtual directories..." -ForegroundColor Cyan
             $autodiscoverVdirs = Get-AutodiscoverVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
-                @{N='Type';E={'Autodiscover'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
+                @{N='Type';E={'Autodiscover'}},
+                @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
+                @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
                 WindowsAuthentication, WSSecurityAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
             $vdirs += $autodiscoverVdirs
@@ -636,7 +658,9 @@ function Get-ExchangeOnPremisesData {
         try {
             Write-Host "  -> Collecting MAPI virtual directories..." -ForegroundColor Cyan
             $mapiVdirs = Get-MapiVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
-                @{N='Type';E={'MAPI'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
+                @{N='Type';E={'MAPI'}},
+                @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
+                @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
                 @{N='CollectedDate';E={Get-Date}}
             $vdirs += $mapiVdirs
             Write-Host "     Found $($mapiVdirs.Count) MAPI virtual directory(ies)" -ForegroundColor Green
@@ -649,7 +673,9 @@ function Get-ExchangeOnPremisesData {
         try {
             Write-Host "  -> Collecting PowerShell virtual directories..." -ForegroundColor Cyan
             $psVdirs = Get-PowerShellVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
-                @{N='Type';E={'PowerShell'}}, ExternalAuthenticationMethods, InternalAuthenticationMethods,
+                @{N='Type';E={'PowerShell'}},
+                @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
+                @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
                 RequireSSL, CertificateAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
             $vdirs += $psVdirs
@@ -675,7 +701,8 @@ function Get-ExchangeOnPremisesData {
     # Outlook Anywhere Configuration
     Invoke-SafeCommand -Command {
         Get-OutlookAnywhere -ErrorAction SilentlyContinue | Select-Object Identity, Server, InternalHostname, ExternalHostname,
-        InternalClientAuthenticationMethod, ExternalClientAuthenticationMethod, IISAuthenticationMethods,
+        InternalClientAuthenticationMethod, ExternalClientAuthenticationMethod,
+        @{N='IISAuthenticationMethods';E={$_.IISAuthenticationMethods -join '; '}},
         SSLOffloading, ExternalClientsRequireSsl, InternalClientsRequireSsl,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Outlook Anywhere (RPC over HTTP)" -Category "OutlookAnywhere"
@@ -688,7 +715,8 @@ function Get-ExchangeOnPremisesData {
     } -Description "Federation Trust" -Category "FederationTrust"
 
     Invoke-SafeCommand -Command {
-        Get-OrganizationRelationship -ErrorAction SilentlyContinue | Select-Object Name, DomainNames,
+        Get-OrganizationRelationship -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='DomainNames';E={$_.DomainNames -join '; '}},
         FreeBusyAccessEnabled, FreeBusyAccessLevel, FreeBusyAccessScope, MailboxMoveEnabled,
         DeliveryReportEnabled, MailTipsAccessEnabled, MailTipsAccessLevel, MailTipsAccessScope,
         @{N='CollectedDate';E={Get-Date}}
@@ -696,13 +724,17 @@ function Get-ExchangeOnPremisesData {
 
     # Sharing Policies
     Invoke-SafeCommand -Command {
-        Get-SharingPolicy -ErrorAction SilentlyContinue | Select-Object Name, Domains, Enabled, Default,
+        Get-SharingPolicy -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='Domains';E={$_.Domains -join '; '}},
+        Enabled, Default,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Sharing Policies" -Category "SharingPolicies"
 
     # Retention Policies and Tags
     Invoke-SafeCommand -Command {
-        Get-RetentionPolicy -ErrorAction SilentlyContinue | Select-Object Name, RetentionPolicyTagLinks, IsDefault,
+        Get-RetentionPolicy -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='RetentionPolicyTagLinks';E={$_.RetentionPolicyTagLinks -join '; '}},
+        IsDefault,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Retention Policies" -Category "RetentionPolicies"
 
@@ -724,8 +756,10 @@ function Get-ExchangeOnPremisesData {
 
     # Offline Address Books
     Invoke-SafeCommand -Command {
-        Get-OfflineAddressBook -ErrorAction SilentlyContinue | Select-Object Name, AddressLists, Server, PublicFolderDatabase,
-        Schedule, IsDefault, @{N='CollectedDate';E={Get-Date}}
+        Get-OfflineAddressBook -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='AddressLists';E={$_.AddressLists -join '; '}},
+        Server, PublicFolderDatabase, Schedule, IsDefault,
+        @{N='CollectedDate';E={Get-Date}}
     } -Description "Offline Address Books" -Category "OfflineAddressBooks"
 
     # Mailbox Statistics Summary - OPTIMIZED with single-pass algorithm
@@ -797,8 +831,14 @@ function Get-ExchangeOnPremisesData {
     # Hybrid Configuration (if exists)
     Invoke-SafeCommand -Command {
         Get-HybridConfiguration -ErrorAction SilentlyContinue | Select-Object Identity,
-        OnPremisesSmartHost, Domains, Features, TlsCertificateName, EdgeTransportServers,
-        ReceivingTransportServers, SendingTransportServers, ClientAccessServers,
+        OnPremisesSmartHost,
+        @{N='Domains';E={$_.Domains -join '; '}},
+        @{N='Features';E={$_.Features -join '; '}},
+        TlsCertificateName,
+        @{N='EdgeTransportServers';E={$_.EdgeTransportServers -join '; '}},
+        @{N='ReceivingTransportServers';E={$_.ReceivingTransportServers -join '; '}},
+        @{N='SendingTransportServers';E={$_.SendingTransportServers -join '; '}},
+        @{N='ClientAccessServers';E={$_.ClientAccessServers -join '; '}},
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Hybrid Configuration" -Category "HybridConfiguration"
 
@@ -906,7 +946,8 @@ function Get-ExchangeOnlineData {
     # Transport Configuration
     Invoke-SafeCommand -Command {
         Get-TransportConfig | Select-Object MaxReceiveSize, MaxSendSize, ExternalPostmasterAddress,
-        GenerateCopyOfDSNFor, JournalingReportNdrTo, MaxRecipientEnvelopeLimit,
+        @{N='GenerateCopyOfDSNFor';E={$_.GenerateCopyOfDSNFor -join '; '}},
+        JournalingReportNdrTo, MaxRecipientEnvelopeLimit,
         OrganizationFederatedMailbox, RedirectUnprovisionedUserMessagesTo,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Transport Configuration" -Category "EXO_TransportConfiguration"
@@ -919,15 +960,19 @@ function Get-ExchangeOnlineData {
 
     # Inbound Connectors - SMTP Relay for Exchange Online
     Invoke-SafeCommand -Command {
-        Get-InboundConnector | Select-Object Name, ConnectorType, ConnectorSource, SenderDomains,
-        SenderIPAddresses, RequireTls, RestrictDomainsToIPAddresses, Enabled, Comment,
+        Get-InboundConnector | Select-Object Name, ConnectorType, ConnectorSource,
+        @{N='SenderDomains';E={$_.SenderDomains -join '; '}},
+        @{N='SenderIPAddresses';E={$_.SenderIPAddresses -join '; '}},
+        RequireTls, RestrictDomainsToIPAddresses, Enabled, Comment,
         TlsSenderCertificateName, CloudServicesMailEnabled, TreatMessagesAsInternal,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Inbound Connectors (SMTP Relay)" -Category "EXO_InboundConnectors"
 
     # Outbound Connectors - SMTP Relay for Exchange Online
     Invoke-SafeCommand -Command {
-        Get-OutboundConnector | Select-Object Name, ConnectorType, RecipientDomains, SmartHosts,
+        Get-OutboundConnector | Select-Object Name, ConnectorType,
+        @{N='RecipientDomains';E={$_.RecipientDomains -join '; '}},
+        @{N='SmartHosts';E={$_.SmartHosts -join '; '}},
         TlsDomain, UseMxRecord, RouteAllMessagesViaOnPremises, Enabled, Comment,
         TlsSettings, IsTransportRuleScoped, CloudServicesMailEnabled, AllAcceptedDomains,
         @{N='CollectedDate';E={Get-Date}}
@@ -1079,7 +1124,9 @@ function Get-ExchangeOnlineData {
 
     # Retention Policies
     Invoke-SafeCommand -Command {
-        Get-RetentionPolicy -ErrorAction SilentlyContinue | Select-Object Name, RetentionPolicyTagLinks, IsDefault,
+        Get-RetentionPolicy -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='RetentionPolicyTagLinks';E={$_.RetentionPolicyTagLinks -join '; '}},
+        IsDefault,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Retention Policies" -Category "EXO_RetentionPolicies"
 
@@ -1109,13 +1156,16 @@ function Get-ExchangeOnlineData {
 
     # Offline Address Books
     Invoke-SafeCommand -Command {
-        Get-OfflineAddressBook -ErrorAction SilentlyContinue | Select-Object Name, AddressLists, IsDefault,
+        Get-OfflineAddressBook -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='AddressLists';E={$_.AddressLists -join '; '}},
+        IsDefault,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Offline Address Books" -Category "EXO_OfflineAddressBooks"
 
     # Organization Relationships (Federation)
     Invoke-SafeCommand -Command {
-        Get-OrganizationRelationship -ErrorAction SilentlyContinue | Select-Object Name, DomainNames,
+        Get-OrganizationRelationship -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='DomainNames';E={$_.DomainNames -join '; '}},
         FreeBusyAccessEnabled, FreeBusyAccessLevel, FreeBusyAccessScope, MailboxMoveEnabled,
         DeliveryReportEnabled, MailTipsAccessEnabled, MailTipsAccessLevel, MailTipsAccessScope,
         @{N='CollectedDate';E={Get-Date}}
@@ -1123,7 +1173,9 @@ function Get-ExchangeOnlineData {
 
     # Sharing Policies
     Invoke-SafeCommand -Command {
-        Get-SharingPolicy -ErrorAction SilentlyContinue | Select-Object Name, Domains, Enabled, Default,
+        Get-SharingPolicy -ErrorAction SilentlyContinue | Select-Object Name,
+        @{N='Domains';E={$_.Domains -join '; '}},
+        Enabled, Default,
         @{N='CollectedDate';E={Get-Date}}
     } -Description "Sharing Policies" -Category "EXO_SharingPolicies"
 

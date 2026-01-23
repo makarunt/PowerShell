@@ -1,13 +1,75 @@
 # Exchange Documentation Script - Fixes Applied
 
-**Version:** 3.1.2 (Logging Enhanced)
+**Version:** 3.1.3 (ArrayList Fixed)
 **Date:** 2026-01-23
 **Previous Versions:**
+- 3.1.2 (Logging Enhanced) - 2026-01-23
 - 3.1.1 (Encoding Fixed) - 2026-01-23
 - 3.1 (Fixed) - 2026-01-21
 
 **Original Script:** Exchange-Documentation-Script-Enhanced.ps1
 **Fixed Script:** Exchange-Documentation-Script-Fixed.ps1
+
+---
+
+## 🔧 ARRAYLIST FIX (v3.1.3 - 2026-01-23)
+
+**Problem:** Many array/collection properties were displaying as "System.Collections.ArrayList" instead of actual values in CSV and HTML reports.
+
+**Root Cause:** PowerShell array properties in cmdlet output were not being converted to strings during data collection, causing Export-CSV and HTML rendering to show the type name instead of values.
+
+**Affected Properties (28 cmdlets fixed):**
+
+### On-Premises:
+1. **Hybrid Configuration:** Domains, Features, EdgeTransportServers, ReceivingTransportServers, SendingTransportServers, ClientAccessServers
+2. **Offline Address Books:** AddressLists
+3. **Organization Relationships:** DomainNames
+4. **Outlook Anywhere:** IISAuthenticationMethods
+5. **Receive Connectors:** Bindings, RemoteIPRanges
+6. **Retention Policies:** RetentionPolicyTagLinks
+7. **Send Connectors:** AddressSpaces, SourceTransportServers, SmartHosts
+8. **Sharing Policies:** Domains
+9. **Transport Configuration:** GenerateCopyOfDSNFor, InternalSMTPServers
+10. **Transport Rules:** Conditions, Actions, Exceptions
+11. **Virtual Directories (All 8 types):** ExternalAuthenticationMethods, InternalAuthenticationMethods
+
+### Exchange Online:
+1. **Inbound Connectors:** SenderDomains, SenderIPAddresses
+2. **Offline Address Books:** AddressLists
+3. **Organization Relationships:** DomainNames
+4. **Outbound Connectors:** RecipientDomains, SmartHosts
+5. **Retention Policies:** RetentionPolicyTagLinks
+6. **Sharing Policies:** Domains
+7. **Transport Configuration:** GenerateCopyOfDSNFor
+
+**Solution Applied:**
+Changed all array properties to use calculated properties with `-join '; '` to convert arrays to semicolon-separated strings:
+
+```powershell
+# BEFORE (BROKEN):
+Get-SendConnector | Select-Object Identity, AddressSpaces, SmartHosts
+
+# AFTER (FIXED):
+Get-SendConnector | Select-Object Identity,
+    @{N='AddressSpaces';E={$_.AddressSpaces -join '; '}},
+    @{N='SmartHosts';E={$_.SmartHosts -join '; '}}
+```
+
+For complex objects (Transport Rules), used `Out-String`:
+```powershell
+@{N='Conditions';E={($_.Conditions | Out-String).Trim()}}
+```
+
+**Impact:**
+- CSV files now show actual values instead of "System.Collections.ArrayList"
+- HTML reports display readable comma/semicolon-separated lists
+- Data is now analyzable and searchable in Excel
+
+**Example Output:**
+```
+Before: System.Collections.ArrayList
+After:  smtp:contoso.com; smtp:fabrikam.com; smtp:*.tailspintoys.com
+```
 
 ---
 
