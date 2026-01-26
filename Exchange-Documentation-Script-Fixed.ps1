@@ -160,6 +160,11 @@ function Invoke-SafeCommand {
             Write-Verbose "No data returned for $Description"
         } elseif ($result -is [Array] -and $result.Count -eq 0) {
             Write-Verbose "Empty collection returned for $Description"
+        } else {
+            # Log successful data storage
+            $itemCount = if ($result -is [Array]) { $result.Count } else { 1 }
+            Write-Verbose "SUCCESS: Stored $itemCount item(s) in category '$Category'"
+            Write-Host "  [DEBUG] Stored $itemCount item(s) in '$Category'" -ForegroundColor DarkGray
         }
 
         return $result
@@ -615,6 +620,8 @@ function Get-ExchangeOnPremisesData {
         $vdirs = @()
         $startTime = Get-Date
 
+        Write-Verbose "Starting virtual directory collection. Initial array count: $($vdirs.Count)"
+
         # OWA Virtual Directories
         try {
             Write-Host "  -> Collecting OWA virtual directories..." -ForegroundColor Cyan
@@ -624,10 +631,16 @@ function Get-ExchangeOnPremisesData {
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
                 WindowsAuthentication,
                 @{N='CollectedDate';E={Get-Date}}
-            $vdirs += $owaVdirs
-            Write-Host "     Found $($owaVdirs.Count) OWA virtual directory(ies)" -ForegroundColor Green
+
+            if ($owaVdirs) {
+                $vdirs += $owaVdirs
+                Write-Host "     Found $($owaVdirs.Count) OWA virtual directory(ies)" -ForegroundColor Green
+                Write-Verbose "Total vdirs after OWA: $($vdirs.Count)"
+            } else {
+                Write-Host "     No OWA virtual directories found" -ForegroundColor Yellow
+            }
         } catch {
-            Write-Host "     No OWA virtual directories found or error occurred" -ForegroundColor Yellow
+            Write-Host "     Error collecting OWA virtual directories: $($_.Exception.Message)" -ForegroundColor Red
             Write-Verbose "Could not get OWA virtual directories: $($_.Exception.Message)"
         }
 
@@ -746,6 +759,12 @@ function Get-ExchangeOnPremisesData {
         # Ensure we return the array even if empty
         if ($vdirs.Count -eq 0) {
             Write-Warning "No virtual directories were collected. Check permissions and Exchange server connectivity."
+        } else {
+            # Debug: Show types collected
+            $types = ($vdirs | Group-Object Type | ForEach-Object { "$($_.Name): $($_.Count)" }) -join ', '
+            Write-Host "  [DEBUG] Virtual directory types collected: $types" -ForegroundColor DarkGray
+            Write-Host "  [DEBUG] About to return array with $($vdirs.Count) items" -ForegroundColor DarkGray
+            Write-Verbose "Virtual directory array type: $($vdirs.GetType().FullName)"
         }
 
         return $vdirs
@@ -1277,6 +1296,10 @@ function Get-ExchangeOnlineData {
 function Export-ToCSV {
     Write-LogProgress "Exporting data to CSV format (creating separate files per category)"
 
+    # Debug: Show all available categories
+    Write-Host "`n[DEBUG] Categories available for export: $($Script:ReportData.Keys.Count)" -ForegroundColor DarkGray
+    Write-Host "[DEBUG] Category names: $($Script:ReportData.Keys -join ', ')" -ForegroundColor DarkGray
+
     $csvFileCount = 0
     $csvOutputFolder = Join-Path $OutputPath "CSV_Export_$Script:Timestamp"
 
@@ -1287,6 +1310,10 @@ function Export-ToCSV {
 
     foreach ($category in $Script:ReportData.Keys | Sort-Object) {
         $data = $Script:ReportData[$category]
+
+        # Debug: Show category being processed
+        $itemCount = if ($data -is [Array]) { $data.Count } elseif ($null -eq $data) { "null" } else { 1 }
+        Write-Host "  [DEBUG] Processing category '$category' with $itemCount item(s)" -ForegroundColor DarkGray
 
         if ($null -eq $data) {
             Write-Verbose "Skipping null category: $category"
@@ -1543,9 +1570,16 @@ function Export-ToHTML {
 "@
 
     # Generate sections for each category with enhanced styling
+    Write-Host "`n[DEBUG HTML] Categories available for HTML export: $($Script:ReportData.Keys.Count)" -ForegroundColor DarkGray
+    Write-Host "[DEBUG HTML] Category names: $($Script:ReportData.Keys -join ', ')" -ForegroundColor DarkGray
+
     foreach ($category in $Script:ReportData.Keys | Sort-Object) {
         $data = $Script:ReportData[$category]
         $displayName = $category -replace "_", " " -replace "EXO", "Exchange Online"
+
+        # Debug: Show category being processed
+        $itemCount = if ($data -is [Array]) { $data.Count } elseif ($null -eq $data) { "null" } else { 1 }
+        Write-Host "  [DEBUG HTML] Processing category '$category' ($displayName) with $itemCount item(s)" -ForegroundColor DarkGray
 
         # Determine environment type and criticality for styling
         $envClass = "onprem"
