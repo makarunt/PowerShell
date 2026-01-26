@@ -119,7 +119,7 @@ else {
 
 # Import CSV
 try {
-    $permissions = Import-Csv -Path $CsvPath -ErrorAction Stop
+    $permissions = Import-Csv -Path $CsvPath -Delimiter ';' -ErrorAction Stop
     Write-Log -Message "Successfully imported CSV with $($permissions.Count) entries" -LogFile $successLogFile -Level SUCCESS
 }
 catch {
