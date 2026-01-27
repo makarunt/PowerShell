@@ -625,7 +625,7 @@ function Get-ExchangeOnPremisesData {
         # OWA Virtual Directories
         try {
             Write-Host "  -> Collecting OWA virtual directories..." -ForegroundColor Cyan
-            $owaVdirs = Get-OwaVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            $owaVdirs = Get-OwaVirtualDirectory -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'OWA'}}, DefaultDomain, LogonFormat, ClientAuthCleanupLevel,
                 @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
@@ -647,7 +647,7 @@ function Get-ExchangeOnPremisesData {
         # ECP Virtual Directories
         try {
             Write-Host "  -> Collecting ECP (Exchange Control Panel) virtual directories..." -ForegroundColor Cyan
-            $ecpVdirs = Get-EcpVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            $ecpVdirs = Get-EcpVirtualDirectory -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'ECP'}},
                 @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
@@ -662,7 +662,7 @@ function Get-ExchangeOnPremisesData {
         # ActiveSync Virtual Directories
         try {
             Write-Host "  -> Collecting ActiveSync virtual directories..." -ForegroundColor Cyan
-            $asVdirs = Get-ActiveSyncVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            $asVdirs = Get-ActiveSyncVirtualDirectory -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'ActiveSync'}},
                 @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
@@ -678,7 +678,7 @@ function Get-ExchangeOnPremisesData {
         # EWS Virtual Directories - CRITICAL
         try {
             Write-Host "  -> Collecting EWS (Exchange Web Services) virtual directories..." -ForegroundColor Cyan
-            $ewsVdirs = Get-WebServicesVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            $ewsVdirs = Get-WebServicesVirtualDirectory -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'EWS'}}, CertificateAuthentication, WSSecurityAuthentication, OAuthAuthentication,
                 @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
@@ -694,7 +694,7 @@ function Get-ExchangeOnPremisesData {
         # OAB Virtual Directories
         try {
             Write-Host "  -> Collecting OAB (Offline Address Book) virtual directories..." -ForegroundColor Cyan
-            $oabVdirs = Get-OabVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            $oabVdirs = Get-OabVirtualDirectory -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'OAB'}},
                 @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
@@ -709,7 +709,7 @@ function Get-ExchangeOnPremisesData {
         # Autodiscover Virtual Directories
         try {
             Write-Host "  -> Collecting Autodiscover virtual directories..." -ForegroundColor Cyan
-            $autodiscoverVdirs = Get-AutodiscoverVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            $autodiscoverVdirs = Get-AutodiscoverVirtualDirectory -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'Autodiscover'}},
                 @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
@@ -725,7 +725,7 @@ function Get-ExchangeOnPremisesData {
         # MAPI Virtual Directories
         try {
             Write-Host "  -> Collecting MAPI virtual directories..." -ForegroundColor Cyan
-            $mapiVdirs = Get-MapiVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            $mapiVdirs = Get-MapiVirtualDirectory -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'MAPI'}},
                 @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
@@ -740,7 +740,7 @@ function Get-ExchangeOnPremisesData {
         # PowerShell Virtual Directories
         try {
             Write-Host "  -> Collecting PowerShell virtual directories..." -ForegroundColor Cyan
-            $psVdirs = Get-PowerShellVirtualDirectory -ErrorAction Stop | Select-Object Identity, Server, InternalUrl, ExternalUrl,
+            $psVdirs = Get-PowerShellVirtualDirectory -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object Identity, Server, InternalUrl, ExternalUrl,
                 @{N='Type';E={'PowerShell'}},
                 @{N='ExternalAuthenticationMethods';E={$_.ExternalAuthenticationMethods -join '; '}},
                 @{N='InternalAuthenticationMethods';E={$_.InternalAuthenticationMethods -join '; '}},
