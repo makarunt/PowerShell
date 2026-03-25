@@ -22,6 +22,10 @@
 .PARAMETER Connector
     Optional. Filter results to a specific connector name (partial match).
 
+.PARAMETER ExportCsv
+    Optional. Full path to a CSV file where results will be exported.
+    If the file already exists it will be overwritten.
+
 .EXAMPLE
     .\Get-ExchangeReceiveTraffic.ps1 -Hours 5
 
@@ -30,6 +34,12 @@
 
 .EXAMPLE
     .\Get-ExchangeReceiveTraffic.ps1 -Hours 2 -Connector "Anon Relay"
+
+.EXAMPLE
+    .\Get-ExchangeReceiveTraffic.ps1 -Hours 24 -ExportCsv "C:\Reports\mail-traffic.csv"
+
+.EXAMPLE
+    .\Get-ExchangeReceiveTraffic.ps1 -Hours 5 -Connector "Anon Relay" -ExportCsv "C:\Reports\anon-relay.csv"
 #>
 
 [CmdletBinding()]
@@ -42,7 +52,10 @@ param(
     [int]$Hours = 5,
 
     [Parameter()]
-    [string]$Connector = ''
+    [string]$Connector = '',
+
+    [Parameter()]
+    [string]$ExportCsv = ''
 )
 
 #region ── helpers ──────────────────────────────────────────────────────────────
@@ -215,6 +228,22 @@ else {
     Write-Host "Summary per connector:" -ForegroundColor Cyan
     $results | Group-Object 'Connector' | ForEach-Object {
         Write-Host ("  {0,-45} : {1} message(s)" -f $_.Name, $_.Count)
+    }
+
+    # CSV export
+    if ($ExportCsv) {
+        try {
+            $exportDir = Split-Path -Path $ExportCsv -Parent
+            if ($exportDir -and -not (Test-Path $exportDir)) {
+                New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+            }
+            $results | Export-Csv -Path $ExportCsv -NoTypeInformation -Encoding UTF8 -Force
+            Write-Host ""
+            Write-Host ("Results exported to: {0}" -f $ExportCsv) -ForegroundColor Green
+        }
+        catch {
+            Write-Error "Failed to export CSV: $_"
+        }
     }
 }
 
