@@ -169,10 +169,18 @@ Write-Host ""
 #region ── parse logs ───────────────────────────────────────────────────────────
 
 # Key: session-id  Value: hashtable with session data
-$sessions = @{}
+$sessions  = @{}
+$fileIndex = 0
+$totalFiles = $logFiles.Count
 
 foreach ($file in $logFiles) {
-    Write-Verbose "Processing: $($file.Name)"
+    $fileIndex++
+    $pct = [int]($fileIndex / $totalFiles * 100)
+
+    Write-Progress -Activity "Processing log files" `
+                   -Status ("File {0}/{1}  ({2})  —  {3} session(s) found so far" -f
+                       $fileIndex, $totalFiles, $file.Name, $sessions.Count) `
+                   -PercentComplete $pct
 
     $lines = Get-Content -Path $file.FullName -Encoding UTF8 -ErrorAction SilentlyContinue
     if (-not $lines) { continue }
@@ -241,6 +249,8 @@ foreach ($file in $logFiles) {
         }
     }
 }
+
+Write-Progress -Activity "Processing log files" -Completed
 
 #endregion
 
