@@ -34,6 +34,11 @@
 .PARAMETER Connector
     Optional. Filter results to a specific connector name (partial, case-insensitive match).
 
+.PARAMETER ExcludeIP
+    Optional. One or more IP addresses to exclude from the report.
+    Useful for filtering out known infrastructure (e.g. Edge Transport servers)
+    whose traffic is expected and not relevant to the analysis.
+
 .PARAMETER ExportCsv
     Optional. Full path to a CSV file for detailed results.
     A matching summary text file (<basename>_summary.txt) is created automatically.
@@ -53,6 +58,9 @@
 
 .EXAMPLE
     .\Get-ExchangeReceiveTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Days 7 -ExportCsv "C:\Reports\traffic.csv"
+
+.EXAMPLE
+    .\Get-ExchangeReceiveTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Hours 5 -ExcludeIP "10.116.1.10","10.116.1.11"
 #>
 
 [CmdletBinding()]
@@ -70,6 +78,9 @@ param(
 
     [Parameter()]
     [string]$Connector = '',
+
+    [Parameter()]
+    [string[]]$ExcludeIP = @(),
 
     [Parameter()]
     [string]$ExportCsv = ''
@@ -264,7 +275,8 @@ Write-Host ""
 #region ── build result objects ─────────────────────────────────────────────────
 
 $mailSessions = $sessions.Values |
-    Where-Object { $_.HasMail -and $null -ne $_.MailFrom -and $_.RcptTo.Count -gt 0 }
+    Where-Object { $_.HasMail -and $null -ne $_.MailFrom -and $_.RcptTo.Count -gt 0 } |
+    Where-Object { $ExcludeIP.Count -eq 0 -or $_.RemoteIP -notin $ExcludeIP }
 
 $results = $mailSessions | ForEach-Object {
     foreach ($rcpt in $_.RcptTo) {
@@ -307,7 +319,8 @@ $summaryLines.Add("From (UTC): $($cutoff.ToUniversalTime().ToString('yyyy-MM-dd 
 $summaryLines.Add("To (UTC)  : $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss'))")
 $summaryLines.Add("Log type  : SMTP $detectedLogType Protocol Log")
 $summaryLines.Add("Log path  : $LogPath")
-if ($Connector) { $summaryLines.Add("Connector filter: $Connector") }
+if ($Connector)           { $summaryLines.Add("Connector filter : $Connector") }
+if ($ExcludeIP.Count -gt 0) { $summaryLines.Add("Excluded IPs     : $($ExcludeIP -join ', ')") }
 $summaryLines.Add("")
 
 if ($results.Count -eq 0) {
