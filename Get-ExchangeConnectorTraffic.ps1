@@ -178,7 +178,7 @@ foreach ($file in $logFiles) {
     $pct = [int]($fileIndex / $totalFiles * 100)
 
     Write-Progress -Activity "Processing log files" `
-                   -Status ("File {0}/{1}  ({2})  —  {3} session(s) found so far" -f
+                   -Status ("File {0}/{1}  ({2})  -  {3} session(s) found so far" -f
                        $fileIndex, $totalFiles, $file.Name, $sessions.Count) `
                    -PercentComplete $pct
 
