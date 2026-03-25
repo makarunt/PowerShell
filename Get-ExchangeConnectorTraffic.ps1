@@ -17,8 +17,9 @@
     the summary is also saved as a .txt file with the same base name.
 
 .PARAMETER LogPath
-    REQUIRED. Path to the folder containing SMTP Receive Protocol log files.
-    Example: C:\...\TransportRoles\Logs\FrontEnd\ProtocolLog\SmtpReceive
+    Path to the folder containing SMTP Receive Protocol log files.
+    Default: C:\Program Files\Microsoft\Exchange Server\V15\TransportRoles\Logs\FrontEnd\ProtocolLog\SmtpReceive
+    Override if logs are stored on a custom path.
 
 .PARAMETER Hours
     Number of hours back from now to analyse. Cannot be combined with -Days.
@@ -61,8 +62,8 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
-    [string]$LogPath,
+    [Parameter()]
+    [string]$LogPath = 'C:\Program Files\Microsoft\Exchange Server\V15\TransportRoles\Logs\FrontEnd\ProtocolLog\SmtpReceive',
 
     [Parameter()]
     [ValidateRange(1, 8760)]
