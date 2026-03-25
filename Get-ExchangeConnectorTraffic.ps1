@@ -2,27 +2,23 @@
 
 <#
 .SYNOPSIS
-    Analyzes Exchange SMTP protocol logs (Receive or Send connectors) for mail traffic.
+    Analyzes Exchange SMTP Receive connector protocol logs for mail traffic.
 
 .DESCRIPTION
-    Parses Exchange SMTP protocol log files (.log) and reports mail traffic per
-    connector, including sender address, recipient(s), remote IP, and connector name.
+    Parses Exchange SMTP Receive Protocol log files (.log) and reports mail
+    traffic per receive connector, including sender address, recipient(s),
+    source IP, and connector name.
 
-    Supports both Receive connector logs (Exchange acts as server) and Send connector
-    logs (Exchange acts as client). Log type is auto-detected from the #Log-type header.
+    A new log file is created every hour by Exchange. Files are selected based
+    on their last-write time to cover the requested time window.
 
-    A new log file is created every hour by Exchange. Files are selected based on
-    their last-write time to cover the requested time window.
-
-    An executive summary (per server -> per IP with message counts) is always shown
-    on the console. When -ExportCsv is used, the summary is also saved as a .txt file
-    with the same base name.
+    An executive summary (per server -> per connector -> per source IP with
+    message counts) is always shown on the console. When -ExportCsv is used,
+    the summary is also saved as a .txt file with the same base name.
 
 .PARAMETER LogPath
-    REQUIRED. Path to the folder containing Exchange SMTP protocol log files.
-    Examples:
-      Receive: C:\...\TransportRoles\Logs\FrontEnd\ProtocolLog\SmtpReceive
-      Send   : C:\...\TransportRoles\Logs\FrontEnd\ProtocolLog\SmtpSend
+    REQUIRED. Path to the folder containing SMTP Receive Protocol log files.
+    Example: C:\...\TransportRoles\Logs\FrontEnd\ProtocolLog\SmtpReceive
 
 .PARAMETER Hours
     Number of hours back from now to analyse. Cannot be combined with -Days.
@@ -45,22 +41,22 @@
     Both files are overwritten if they already exist.
 
 .EXAMPLE
-    .\Get-ExchangeReceiveTraffic.ps1 -LogPath "C:\Logs\SmtpReceive"
+    .\Get-ExchangeConnectorTraffic.ps1 -LogPath "C:\Logs\SmtpReceive"
 
 .EXAMPLE
-    .\Get-ExchangeReceiveTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Hours 12
+    .\Get-ExchangeConnectorTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Hours 12
 
 .EXAMPLE
-    .\Get-ExchangeReceiveTraffic.ps1 -LogPath "C:\Logs\SmtpSend" -Days 3
+    .\Get-ExchangeConnectorTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Days 3
 
 .EXAMPLE
-    .\Get-ExchangeReceiveTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Hours 5 -Connector "Anon Relay"
+    .\Get-ExchangeConnectorTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Hours 5 -Connector "Anon Relay"
 
 .EXAMPLE
-    .\Get-ExchangeReceiveTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Days 7 -ExportCsv "C:\Reports\traffic.csv"
+    .\Get-ExchangeConnectorTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Days 7 -ExportCsv "C:\Reports\traffic.csv"
 
 .EXAMPLE
-    .\Get-ExchangeReceiveTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Hours 5 -ExcludeIP "10.116.1.10","10.116.1.11"
+    .\Get-ExchangeConnectorTraffic.ps1 -LogPath "C:\Logs\SmtpReceive" -Hours 5 -ExcludeIP "10.116.1.10","10.116.1.11"
 #>
 
 [CmdletBinding()]
@@ -94,16 +90,16 @@ if ($Hours -gt 0 -and $Days -gt 0) {
 }
 
 if ($Days -gt 0) {
-    $cutoff      = (Get-Date).AddDays(-$Days)
-    $windowDesc  = "$Days day(s)"
+    $cutoff     = (Get-Date).AddDays(-$Days)
+    $windowDesc = "$Days day(s)"
 }
 elseif ($Hours -gt 0) {
-    $cutoff      = (Get-Date).AddHours(-$Hours)
-    $windowDesc  = "$Hours hour(s)"
+    $cutoff     = (Get-Date).AddHours(-$Hours)
+    $windowDesc = "$Hours hour(s)"
 }
 else {
-    $cutoff      = (Get-Date).AddHours(-5)
-    $windowDesc  = '5 hours (default)'
+    $cutoff     = (Get-Date).AddHours(-5)
+    $windowDesc = '5 hours (default)'
 }
 
 #endregion
@@ -118,7 +114,7 @@ function Get-EmailAddress {
     return $null
 }
 
-function Get-RemoteIP {
+function Get-SourceIP {
     param([string]$Endpoint)
     # Endpoint format: ip:port (IPv4) or [ipv6]:port
     if ($Endpoint -match '^(.+):\d+$') {
@@ -145,7 +141,7 @@ function Get-ConnectorName {
 
 #region ── file selection ───────────────────────────────────────────────────────
 
-Write-Host "Exchange SMTP Connector Traffic Analyzer" -ForegroundColor Cyan
+Write-Host "Exchange Receive Connector Traffic Analyzer" -ForegroundColor Cyan
 Write-Host ("Period             : last {0}" -f $windowDesc) -ForegroundColor Cyan
 Write-Host ("Analyse from (UTC) : {0:yyyy-MM-dd HH:mm:ss}" -f $cutoff.ToUniversalTime()) -ForegroundColor Cyan
 Write-Host ("Log path           : {0}" -f $LogPath) -ForegroundColor Cyan
@@ -172,9 +168,6 @@ Write-Host ""
 
 #region ── parse logs ───────────────────────────────────────────────────────────
 
-# Holds detected log type (populated from first file that has the header)
-$detectedLogType = $null   # 'Receive' or 'Send'
-
 # Key: session-id  Value: hashtable with session data
 $sessions = @{}
 
@@ -183,17 +176,6 @@ foreach ($file in $logFiles) {
 
     $lines = Get-Content -Path $file.FullName -Encoding UTF8 -ErrorAction SilentlyContinue
     if (-not $lines) { continue }
-
-    # Detect log type from this file (use first detection found)
-    if (-not $detectedLogType) {
-        $logTypeLine = $lines | Where-Object { $_ -like '#Log-type:*' } | Select-Object -First 1
-        if ($logTypeLine -match 'Send') {
-            $detectedLogType = 'Send'
-        }
-        elseif ($logTypeLine -match 'Receive') {
-            $detectedLogType = 'Receive'
-        }
-    }
 
     # Extract field names from the "#Fields:" header line
     $fieldsLine = $lines | Where-Object { $_ -like '#Fields:*' } | Select-Object -Last 1
@@ -225,7 +207,7 @@ foreach ($file in $logFiles) {
             $sessions[$sessionId] = @{
                 ServerName    = Get-ServerName    $connId
                 ConnectorName = Get-ConnectorName $connId
-                RemoteIP      = Get-RemoteIP      $remoteEP
+                SourceIP      = Get-SourceIP      $remoteEP
                 FirstSeen     = $timestamp
                 MailFrom      = $null
                 RcptTo        = [System.Collections.Generic.List[string]]::new()
@@ -235,16 +217,14 @@ foreach ($file in $logFiles) {
 
         $s = $sessions[$sessionId]
 
-        # Capture remote IP from the first non-empty endpoint seen for this session
-        if (-not $s.RemoteIP -and $remoteEP) {
-            $s.RemoteIP = Get-RemoteIP $remoteEP
+        # Capture source IP from the first non-empty remote endpoint seen for this session
+        if (-not $s.SourceIP -and $remoteEP) {
+            $s.SourceIP = Get-SourceIP $remoteEP
         }
 
-        # Event direction depends on log type:
-        #   Receive log – Exchange is server  → client commands arrive as event "<"
-        #   Send log    – Exchange is client  → Exchange commands go out as event ">"
-        $cmdEvent = if ($detectedLogType -eq 'Send') { '>' } else { '<' }
-        if ($event -ne $cmdEvent) { continue }
+        # In Receive connector logs Exchange is the server:
+        # event "<" = client (sender) sent a command to Exchange
+        if ($event -ne '<') { continue }
 
         if ($data -like 'MAIL From:*' -or $data -like 'MAIL FROM:*') {
             $addr = Get-EmailAddress -Data $data -Command 'MAIL From'
@@ -262,31 +242,23 @@ foreach ($file in $logFiles) {
     }
 }
 
-if (-not $detectedLogType) { $detectedLogType = 'Receive' }   # fallback
-
-# Label the IP column based on log type
-$ipColumnLabel = if ($detectedLogType -eq 'Send') { 'Destination IP' } else { 'Source IP' }
-
-Write-Host ("Log type detected  : SMTP {0} Protocol Log" -f $detectedLogType) -ForegroundColor Cyan
-Write-Host ""
-
 #endregion
 
 #region ── build result objects ─────────────────────────────────────────────────
 
 $mailSessions = $sessions.Values |
     Where-Object { $_.HasMail -and $null -ne $_.MailFrom -and $_.RcptTo.Count -gt 0 } |
-    Where-Object { $ExcludeIP.Count -eq 0 -or $_.RemoteIP -notin $ExcludeIP }
+    Where-Object { $ExcludeIP.Count -eq 0 -or $_.SourceIP -notin $ExcludeIP }
 
 $results = $mailSessions | ForEach-Object {
     foreach ($rcpt in $_.RcptTo) {
         [PSCustomObject]@{
-            'Time (UTC)'   = $_.FirstSeen
-            'Server'       = $_.ServerName
-            'Connector'    = $_.ConnectorName
-            $ipColumnLabel = $_.RemoteIP
-            'From'         = $_.MailFrom
-            'To'           = $rcpt
+            'Time (UTC)' = $_.FirstSeen
+            'Server'     = $_.ServerName
+            'Connector'  = $_.ConnectorName
+            'Source IP'  = $_.SourceIP
+            'From'       = $_.MailFrom
+            'To'         = $rcpt
         }
     }
 } | Sort-Object 'Time (UTC)'
@@ -317,9 +289,8 @@ $summaryLines.Add('=' * 60)
 $summaryLines.Add("Period    : last $windowDesc")
 $summaryLines.Add("From (UTC): $($cutoff.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss'))")
 $summaryLines.Add("To (UTC)  : $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss'))")
-$summaryLines.Add("Log type  : SMTP $detectedLogType Protocol Log")
 $summaryLines.Add("Log path  : $LogPath")
-if ($Connector)           { $summaryLines.Add("Connector filter : $Connector") }
+if ($Connector)             { $summaryLines.Add("Connector filter : $Connector") }
 if ($ExcludeIP.Count -gt 0) { $summaryLines.Add("Excluded IPs     : $($ExcludeIP -join ', ')") }
 $summaryLines.Add("")
 
@@ -331,7 +302,7 @@ else {
     $summaryLines.Add("Total sessions : $(($mailSessions | Measure-Object).Count)")
     $summaryLines.Add("")
 
-    # Group: Server → Connector → IP
+    # Group: Server -> Connector -> Source IP
     $byServer = $results | Group-Object 'Server' | Sort-Object Name
 
     foreach ($srvGroup in $byServer) {
@@ -343,7 +314,7 @@ else {
         foreach ($connGroup in $byConnector) {
             $summaryLines.Add("  Connector: $($connGroup.Name)")
 
-            $byIP = $connGroup.Group | Group-Object $ipColumnLabel |
+            $byIP = $connGroup.Group | Group-Object 'Source IP' |
                 Sort-Object { [int]$_.Count } -Descending
 
             foreach ($ipGroup in $byIP) {
@@ -378,12 +349,12 @@ if ($ExportCsv) {
         else {
             # Write an empty CSV with headers only
             [PSCustomObject]@{
-                'Time (UTC)'   = ''
-                'Server'       = ''
-                'Connector'    = ''
-                $ipColumnLabel = ''
-                'From'         = ''
-                'To'           = ''
+                'Time (UTC)' = ''
+                'Server'     = ''
+                'Connector'  = ''
+                'Source IP'  = ''
+                'From'       = ''
+                'To'         = ''
             } | Export-Csv -Path $ExportCsv -NoTypeInformation -Encoding UTF8 -Force
         }
 
@@ -393,8 +364,8 @@ if ($ExportCsv) {
         $summaryLines | Set-Content -Path $summaryPath -Encoding UTF8 -Force
 
         Write-Host ""
-        Write-Host ("Detail CSV exported to : {0}" -f $ExportCsv)       -ForegroundColor Green
-        Write-Host ("Summary exported to    : {0}" -f $summaryPath)      -ForegroundColor Green
+        Write-Host ("Detail CSV exported to : {0}" -f $ExportCsv)  -ForegroundColor Green
+        Write-Host ("Summary exported to    : {0}" -f $summaryPath) -ForegroundColor Green
     }
     catch {
         Write-Error "Export failed: $_"
