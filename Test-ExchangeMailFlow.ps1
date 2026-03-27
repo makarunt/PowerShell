@@ -222,7 +222,10 @@ if ($AllEvents.Count -eq 0) {
 Write-Header "Rezultati pretrage - ukupno $($AllEvents.Count) događaj(a)"
 
 # Grupiramo po MessageId kako bi pratili svaku poruku zasebno
-$MessageGroups = $AllEvents | Group-Object -Property MessageId | Sort-Object {
+$MessageGroups = $AllEvents | Group-Object -Property MessageId | Where-Object {
+    # Preskoči grupe koje imaju ISKLJUČIVO HADISCARD evente - to su shadow/DR log entriji
+    $_.Group | Where-Object { $_.EventId -ne 'HADISCARD' }
+} | Sort-Object {
     ($_.Group | Sort-Object Timestamp | Select-Object -First 1).Timestamp
 } -Descending
 
