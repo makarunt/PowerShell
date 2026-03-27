@@ -22,7 +22,9 @@
     Predmet poruke. Podržava wildcard (npr. "*Testni mail*").
 
 .PARAMETER MinutesBack
-    Koliko minuta u prošlost pretražiti. Zadano: 60 minuta.
+    Koliko minuta u prošlost pretražiti. Zadano: 15 minuta.
+    Ako se skripta pokrene bez parametara pretrage (From/To/Subject), automatski
+    se koristi 5 minuta.
 
 .PARAMETER Servers
     Lista Exchange transport servera koje pretražujemo.
@@ -58,7 +60,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateRange(1, 10080)]
-    [int]$MinutesBack = 60,
+    [int]$MinutesBack = 15,
 
     [Parameter(Mandatory = $false)]
     [string[]]$Servers,
@@ -106,10 +108,13 @@ function Get-EventColor {
     return $StatusColors['DEFAULT']
 }
 
-# Provjera da li je barem jedan parametar pretrage naveden
-if (-not $From -and -not $To -and -not $Subject) {
-    Write-Error "Morate navesti barem jedan kriterij pretrage: -From, -To ili -Subject."
-    exit 1
+# Ako nema kriterija pretrage, prikaži sve iz zadnjih 5 minuta
+$NoFilterMode = -not $From -and -not $To -and -not $Subject
+if ($NoFilterMode) {
+    # Ako korisnik nije eksplicitno postavio MinutesBack, koristi 5 minuta
+    if (-not $PSBoundParameters.ContainsKey('MinutesBack')) {
+        $MinutesBack = 5
+    }
 }
 
 # Provjera dostupnosti Exchange cmdleta
@@ -132,9 +137,13 @@ $StartTime = (Get-Date).AddMinutes(-$MinutesBack)
 $EndTime   = Get-Date
 
 Write-Host "`nKriteriji pretrage:" -ForegroundColor White
-Write-Host "  Pošiljatelj  : $(if ($From)    { $From    } else { '(nije naveden)' })" -ForegroundColor Gray
-Write-Host "  Primatelj    : $(if ($To)      { $To      } else { '(nije naveden)' })" -ForegroundColor Gray
-Write-Host "  Predmet      : $(if ($Subject) { $Subject } else { '(nije naveden)' })" -ForegroundColor Gray
+if ($NoFilterMode) {
+    Write-Host "  Bez filtera - prikazujem sve poruke iz zadnjih $MinutesBack minuta" -ForegroundColor Yellow
+} else {
+    Write-Host "  Pošiljatelj  : $(if ($From)    { $From    } else { '(nije naveden)' })" -ForegroundColor Gray
+    Write-Host "  Primatelj    : $(if ($To)      { $To      } else { '(nije naveden)' })" -ForegroundColor Gray
+    Write-Host "  Predmet      : $(if ($Subject) { $Subject } else { '(nije naveden)' })" -ForegroundColor Gray
+}
 Write-Host "  Vremenski r. : $($StartTime.ToString('dd.MM.yyyy HH:mm:ss')) - $($EndTime.ToString('dd.MM.yyyy HH:mm:ss'))" -ForegroundColor Gray
 Write-Host ""
 
