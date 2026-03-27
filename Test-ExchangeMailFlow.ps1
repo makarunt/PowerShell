@@ -320,8 +320,8 @@ foreach ($MessageGroup in $MessageGroups) {
         Write-Host ""
 
         # Detalji konteksta (odgovor odredišnog servera)
-        if ($SourceCtx -and $Event.EventId -in @('SEND', 'FAIL', 'DEFER')) {
-            # Izvuci SMTP response kod ako postoji
+        if ($SourceCtx -and $Event.EventId -in @('SEND', 'SENDEXTERNAL', 'FAIL', 'DEFER')) {
+            # Izvuci SMTP response kod ako postoji (bez ^ - nije nužno na početku stringa)
             if ($SourceCtx -match '(\d{3}\s.+?)(?:;|$)') {
                 $SmtpResponse = $Matches[1].Trim()
                 $RespColor = if ($SmtpResponse -match '^2\d\d') { 'Green' }
@@ -352,7 +352,14 @@ foreach ($MessageGroup in $MessageGroups) {
                              $Matches[1]
                          } elseif ($SendEvent.NextHopDomain) {
                              $SendEvent.NextHopDomain
-                         } else { 'N/A' }
+                         } else { $null }
+
+            # Ako nema hostname, izvuci domenu iz adrese primatelja kao ciljna domena
+            $RecipDomain = $null
+            if (-not $DestHost -and $SendEvent.Recipients) {
+                $firstRecip = @($SendEvent.Recipients)[0]
+                if ($firstRecip -match '@(.+)$') { $RecipDomain = $Matches[1] }
+            }
 
             # Izvuci IP adresu ako postoji
             $RemoteIP  = if ($SendEvent.SourceContext -match 'RemoteEndpoint=\[?([0-9a-fA-F.:]+)\]?') {
@@ -362,13 +369,18 @@ foreach ($MessageGroup in $MessageGroups) {
                          } else { $null }
 
             # Odredi da li je odredišni server prihvatio poruku
-            $SmtpCode  = if ($SendEvent.SourceContext -match '^(\d{3})\s') { $Matches[1] } else { $null }
+            # Bez ^ - SMTP kod ne mora biti na samom početku SourceContext stringa
+            $SmtpCode  = if ($SendEvent.SourceContext -match '(\d{3})\s') { $Matches[1] } else { $null }
+            if ($SmtpCode -and $SmtpCode -notmatch '^[245]\d\d') { $SmtpCode = $null }
+
             $AcceptStatus = if ($SmtpCode -match '^2') {
                                 "PRIHVACENO ($SmtpCode)"
                             } elseif ($SmtpCode -match '^4') {
                                 "PRIVREMENO ODBIJENO ($SmtpCode)"
                             } elseif ($SmtpCode -match '^5') {
                                 "TRAJNO ODBIJENO ($SmtpCode)"
+                            } elseif (-not $SendEvent.SourceContext) {
+                                "(relay preuzeo isporuku - provjeri relay logs)"
                             } else { 'nepoznato' }
             $AcceptColor = if ($SmtpCode -match '^2') { 'Green' }
                            elseif ($SmtpCode -match '^4') { 'Yellow' }
@@ -377,7 +389,13 @@ foreach ($MessageGroup in $MessageGroups) {
 
             Write-Host ("    Exchange server     : {0}" -f $SendEvent.TrackingServer) -ForegroundColor Cyan
             Write-Host ("    Send Connector      : {0}" -f $ConnInfo) -ForegroundColor Magenta
-            Write-Host ("    Odredisni server    : {0}" -f $DestHost) -ForegroundColor Yellow
+            if ($DestHost) {
+                Write-Host ("    Odredisni server    : {0}" -f $DestHost) -ForegroundColor Yellow
+            } elseif ($RecipDomain) {
+                Write-Host ("    Ciljna domena       : {0}" -f $RecipDomain) -ForegroundColor Yellow
+            } else {
+                Write-Host ("    Odredisni server    : N/A") -ForegroundColor DarkGray
+            }
             if ($RemoteIP) {
                 Write-Host ("    Remote IP           : {0}" -f $RemoteIP) -ForegroundColor Gray
             }
