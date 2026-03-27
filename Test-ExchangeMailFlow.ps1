@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Pretražuje Exchange message tracking logove za provjeru outbound mail flowa.
 
