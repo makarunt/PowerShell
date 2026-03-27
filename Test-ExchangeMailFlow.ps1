@@ -71,20 +71,28 @@ param(
 
 #region --- Inicijalizacija i provjere ---
 
+# Fix za prikaz dijakritičkih znakova u konzoli
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 # Ključni eventi za outbound mail flow
-$KeyOutboundEvents = @('RECEIVE', 'SEND', 'FAIL', 'DEFER', 'REDIRECT', 'RESOLVE', 'TRANSFER')
+$KeyOutboundEvents = @('RECEIVE', 'SEND', 'SENDEXTERNAL', 'FAIL', 'DEFER', 'REDIRECT', 'RESOLVE', 'TRANSFER', 'HADISCARD')
+
+# Connector koji označava interni relay između Exchange servera (ne zanima nas kao "outbound")
+$IntraOrgConnector = 'Intra-Organization SMTP Send Connector'
 
 # Boje za ispis statusa
 $StatusColors = @{
-    'SEND'     = 'Green'
-    'RECEIVE'  = 'Cyan'
-    'DELIVER'  = 'Green'
-    'FAIL'     = 'Red'
-    'DEFER'    = 'Yellow'
-    'REDIRECT' = 'Magenta'
-    'RESOLVE'  = 'Gray'
-    'TRANSFER' = 'Yellow'
-    'DEFAULT'  = 'White'
+    'SEND'         = 'Green'
+    'SENDEXTERNAL' = 'Green'
+    'RECEIVE'      = 'Cyan'
+    'DELIVER'      = 'Green'
+    'FAIL'         = 'Red'
+    'DEFER'        = 'Yellow'
+    'REDIRECT'     = 'Magenta'
+    'RESOLVE'      = 'Gray'
+    'TRANSFER'     = 'Yellow'
+    'HADISCARD'    = 'DarkGray'
+    'DEFAULT'      = 'White'
 }
 
 function Write-Header {
@@ -237,22 +245,30 @@ foreach ($MessageGroup in $MessageGroups) {
     $MsgSize    = if ($FirstEvent.TotalBytes) { "$([math]::Round($FirstEvent.TotalBytes / 1KB, 1)) KB" } else { 'N/A' }
 
     # Odredi ukupni status poruke
-    $HasFail    = $GroupEvents | Where-Object { $_.EventId -eq 'FAIL' }
-    $HasDefer   = $GroupEvents | Where-Object { $_.EventId -eq 'DEFER' }
-    $HasSend    = $GroupEvents | Where-Object { $_.EventId -eq 'SEND' }
-    $HasDeliver = $GroupEvents | Where-Object { $_.EventId -eq 'DELIVER' }
+    $HasFail         = $GroupEvents | Where-Object { $_.EventId -eq 'FAIL' }
+    $HasDefer        = $GroupEvents | Where-Object { $_.EventId -eq 'DEFER' }
+    $HasDeliver      = $GroupEvents | Where-Object { $_.EventId -eq 'DELIVER' }
+    # Vanjski send: SENDEXTERNAL ili SEND koji NIJE intra-org connector
+    $HasSendExternal = $GroupEvents | Where-Object {
+        $_.EventId -eq 'SENDEXTERNAL' -or
+        ($_.EventId -eq 'SEND' -and $_.ConnectorId -and $_.ConnectorId -notlike "*$IntraOrgConnector*")
+    }
+    # Sve SEND (uključujući intra-org), samo za fallback status
+    $HasSend         = $GroupEvents | Where-Object { $_.EventId -eq 'SEND' }
 
-    $OverallStatus = if ($HasFail)    { "FAIL (isporuka neuspješna)" }
-                     elseif ($HasDefer)   { "DEFER (privremeno odgođeno)" }
-                     elseif ($HasSend)    { "SENT (poslano na odredišni server)" }
-                     elseif ($HasDeliver) { "DELIVERED (dostavljeno lokalno)" }
-                     else                 { "IN PROGRESS (u obradi)" }
+    $OverallStatus = if ($HasFail)         { "FAIL (isporuka neuspjesna)" }
+                     elseif ($HasDefer)         { "DEFER (privremeno odgodeno)" }
+                     elseif ($HasSendExternal)  { "SENT EXTERNAL (poslano prema van)" }
+                     elseif ($HasSend)          { "RELAYED (proslijedeno interno)" }
+                     elseif ($HasDeliver)       { "DELIVERED (dostavljeno lokalno)" }
+                     else                       { "IN PROGRESS (u obradi)" }
 
-    $StatusColor = if ($HasFail)    { 'Red' }
-                   elseif ($HasDefer)   { 'Yellow' }
-                   elseif ($HasSend)    { 'Green' }
-                   elseif ($HasDeliver) { 'Green' }
-                   else                 { 'Cyan' }
+    $StatusColor = if ($HasFail)         { 'Red' }
+                   elseif ($HasDefer)         { 'Yellow' }
+                   elseif ($HasSendExternal)  { 'Green' }
+                   elseif ($HasSend)          { 'DarkYellow' }
+                   elseif ($HasDeliver)       { 'Green' }
+                   else                       { 'Cyan' }
 
     # Naslov poruke
     $line = '-' * 70
@@ -325,27 +341,49 @@ foreach ($MessageGroup in $MessageGroups) {
         }
     }
 
-    # --- Sažetak outbound rute ---
-    if ($HasSend) {
-        Write-Host "`n  Outbound ruta (SEND eventi):" -ForegroundColor White
-        foreach ($SendEvent in $HasSend) {
-            $ConnInfo    = if ($SendEvent.ConnectorId) { $SendEvent.ConnectorId } else { 'N/A' }
-            $NextHopInfo = if ($SendEvent.NextHopDomain) { $SendEvent.NextHopDomain } else { 'N/A' }
-            $RemoteIP    = if ($SendEvent.SourceContext -match 'RemoteEndpoint=\[?([^\]]+?)\]?(?::|\s|;|$)') {
-                               $Matches[1]
-                           }
-                           elseif ($SendEvent.SourceContext -match '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') {
-                               $Matches[1]
-                           }
-                           else { 'N/A' }
+    # --- Sažetak vanjskog outbound hopa ---
+    if ($HasSendExternal) {
+        Write-Host "`n  Zadnji vanjski hop (izlaz iz organizacije):" -ForegroundColor White
+        foreach ($SendEvent in $HasSendExternal) {
+            $ConnInfo  = if ($SendEvent.ConnectorId) { $SendEvent.ConnectorId } else { 'N/A' }
 
-            Write-Host ("    Exchange server  : {0}" -f $SendEvent.TrackingServer) -ForegroundColor Cyan
-            Write-Host ("    Send Connector   : {0}" -f $ConnInfo) -ForegroundColor Magenta
-            Write-Host ("    Odredišna domena : {0}" -f $NextHopInfo) -ForegroundColor Yellow
-            if ($RemoteIP -ne 'N/A') {
-                Write-Host ("    Remote IP        : {0}" -f $RemoteIP) -ForegroundColor Gray
+            # Izvuci odredišni hostname iz SourceContext (Hostname= polje unutar SMTP odgovora)
+            $DestHost  = if ($SendEvent.SourceContext -match 'Hostname=([^\],\s\[]+)') {
+                             $Matches[1]
+                         } elseif ($SendEvent.NextHopDomain) {
+                             $SendEvent.NextHopDomain
+                         } else { 'N/A' }
+
+            # Izvuci IP adresu ako postoji
+            $RemoteIP  = if ($SendEvent.SourceContext -match 'RemoteEndpoint=\[?([0-9a-fA-F.:]+)\]?') {
+                             $Matches[1]
+                         } elseif ($SendEvent.SourceContext -match '\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b') {
+                             $Matches[1]
+                         } else { $null }
+
+            # Odredi da li je odredišni server prihvatio poruku
+            $SmtpCode  = if ($SendEvent.SourceContext -match '^(\d{3})\s') { $Matches[1] } else { $null }
+            $AcceptStatus = if ($SmtpCode -match '^2') {
+                                "PRIHVACENO ($SmtpCode)"
+                            } elseif ($SmtpCode -match '^4') {
+                                "PRIVREMENO ODBIJENO ($SmtpCode)"
+                            } elseif ($SmtpCode -match '^5') {
+                                "TRAJNO ODBIJENO ($SmtpCode)"
+                            } else { 'nepoznato' }
+            $AcceptColor = if ($SmtpCode -match '^2') { 'Green' }
+                           elseif ($SmtpCode -match '^4') { 'Yellow' }
+                           elseif ($SmtpCode -match '^5') { 'Red' }
+                           else { 'Gray' }
+
+            Write-Host ("    Exchange server     : {0}" -f $SendEvent.TrackingServer) -ForegroundColor Cyan
+            Write-Host ("    Send Connector      : {0}" -f $ConnInfo) -ForegroundColor Magenta
+            Write-Host ("    Odredisni server    : {0}" -f $DestHost) -ForegroundColor Yellow
+            if ($RemoteIP) {
+                Write-Host ("    Remote IP           : {0}" -f $RemoteIP) -ForegroundColor Gray
             }
-            Write-Host ("    Timestamp        : {0}" -f $SendEvent.Timestamp.ToString('dd.MM.yyyy HH:mm:ss')) -ForegroundColor DarkGray
+            Write-Host ("    Prihvacanje poruke  : ") -ForegroundColor White -NoNewline
+            Write-Host $AcceptStatus -ForegroundColor $AcceptColor
+            Write-Host ("    Timestamp           : {0}" -f $SendEvent.Timestamp.ToString('dd.MM.yyyy HH:mm:ss')) -ForegroundColor DarkGray
         }
     }
 }
@@ -356,15 +394,29 @@ foreach ($MessageGroup in $MessageGroups) {
 
 Write-Header "Sažetak"
 
-$TotalMessages  = $MessageGroups.Count
-$SentMessages   = ($MessageGroups | Where-Object { $_.Group.EventId -contains 'SEND' }).Count
-$FailedMessages = ($MessageGroups | Where-Object { $_.Group.EventId -contains 'FAIL' }).Count
-$DeferMessages  = ($MessageGroups | Where-Object { $_.Group.EventId -contains 'DEFER' }).Count
+$TotalMessages        = $MessageGroups.Count
+$SentExternalMessages = ($MessageGroups | Where-Object {
+    $_.Group | Where-Object {
+        $_.EventId -eq 'SENDEXTERNAL' -or
+        ($_.EventId -eq 'SEND' -and $_.ConnectorId -and $_.ConnectorId -notlike "*$IntraOrgConnector*")
+    }
+}).Count
+$RelayedMessages  = ($MessageGroups | Where-Object {
+    ($_.Group.EventId -contains 'SEND') -and -not (
+        $_.Group | Where-Object {
+            $_.EventId -eq 'SENDEXTERNAL' -or
+            ($_.EventId -eq 'SEND' -and $_.ConnectorId -and $_.ConnectorId -notlike "*$IntraOrgConnector*")
+        }
+    )
+}).Count
+$FailedMessages   = ($MessageGroups | Where-Object { $_.Group.EventId -contains 'FAIL' }).Count
+$DeferMessages    = ($MessageGroups | Where-Object { $_.Group.EventId -contains 'DEFER' }).Count
 
-Write-Host ("  Ukupno pronađenih poruka : {0}" -f $TotalMessages) -ForegroundColor White
-Write-Host ("  Uspješno poslanih (SEND) : {0}" -f $SentMessages) -ForegroundColor Green
-Write-Host ("  Neuspješnih (FAIL)       : {0}" -f $FailedMessages) -ForegroundColor $(if ($FailedMessages -gt 0) { 'Red' } else { 'Gray' })
-Write-Host ("  Odgođenih (DEFER)        : {0}" -f $DeferMessages) -ForegroundColor $(if ($DeferMessages -gt 0) { 'Yellow' } else { 'Gray' })
+Write-Host ("  Ukupno pronadenih poruka      : {0}" -f $TotalMessages) -ForegroundColor White
+Write-Host ("  Poslano prema van (eksterno)  : {0}" -f $SentExternalMessages) -ForegroundColor Green
+Write-Host ("  Intra-org relay (samo interno): {0}" -f $RelayedMessages) -ForegroundColor DarkYellow
+Write-Host ("  Neuspjesnih (FAIL)            : {0}" -f $FailedMessages) -ForegroundColor $(if ($FailedMessages -gt 0) { 'Red' } else { 'Gray' })
+Write-Host ("  Odgodenih (DEFER)             : {0}" -f $DeferMessages) -ForegroundColor $(if ($DeferMessages -gt 0) { 'Yellow' } else { 'Gray' })
 
 if ($ServerErrors.Count -gt 0) {
     Write-Host "`n  Serveri s greškama (nisu pretraženi):" -ForegroundColor Red
