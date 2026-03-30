@@ -142,7 +142,7 @@ function Parse-W3CLogFile {
             $isFirstLine = $false
             $tokens = $line -split ','
             $looksLikeHeader = $tokens.Count -ge 3 -and
-                               ($tokens | Where-Object { $_ -match '[^A-Za-z0-9_]' }).Count -eq 0
+                               (@($tokens | Where-Object { $_ -match '[^A-Za-z0-9_]' })).Count -eq 0
             if ($looksLikeHeader) {
                 $fieldNames = $tokens
                 continue
