@@ -116,7 +116,12 @@ function Parse-W3CLogFile {
     $fieldNames = @()
     $records    = [System.Collections.Generic.List[hashtable]]::new()
 
-    foreach ($line in [System.IO.File]::ReadLines($Path)) {
+    # Open with FileShare.ReadWrite so we can read files Exchange currently has open for writing.
+    $fs     = [System.IO.FileStream]::new($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    $reader = [System.IO.StreamReader]::new($fs, [System.Text.Encoding]::UTF8)
+    try {
+    $line = $null
+    while (($line = $reader.ReadLine()) -ne $null) {
         if ($line.StartsWith('#Fields:')) {
             # Parse header: "#Fields: field1,field2,..."
             $fieldNames = $line.Substring(8).Trim() -split ','
@@ -136,6 +141,11 @@ function Parse-W3CLogFile {
             $record[$fieldNames[$i]] = if ($i -lt $values.Count) { $values[$i] } else { '' }
         }
         $records.Add($record)
+    }
+    } # end while
+    finally {
+        $reader.Dispose()
+        $fs.Dispose()
     }
     return $records
 }
@@ -575,12 +585,12 @@ Write-Host ""
 $allEvents = [System.Collections.Generic.List[pscustomobject]]::new()
 
 Write-Host "[1/2] Processing IMAP4 logs..." -ForegroundColor Yellow
-$imapEvents = Parse-ImapLogs -LogDirectory $ImapLogPath -Start $StartDate -End $EndDate
-$allEvents.AddRange($imapEvents)
+[object[]]$imapEvents = @(Parse-ImapLogs -LogDirectory $ImapLogPath -Start $StartDate -End $EndDate)
+if ($imapEvents.Count -gt 0) { $allEvents.AddRange($imapEvents) }
 
 Write-Host "[2/2] Processing POP3 logs..." -ForegroundColor Yellow
-$popEvents = Parse-Pop3Logs -LogDirectory $PopLogPath -Start $StartDate -End $EndDate
-$allEvents.AddRange($popEvents)
+[object[]]$popEvents = @(Parse-Pop3Logs -LogDirectory $PopLogPath -Start $StartDate -End $EndDate)
+if ($popEvents.Count -gt 0) { $allEvents.AddRange($popEvents) }
 
 Write-Host ""
 
