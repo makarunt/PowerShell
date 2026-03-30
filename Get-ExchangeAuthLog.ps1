@@ -113,8 +113,9 @@ function Parse-W3CLogFile {
         [string]$Path
     )
 
-    $fieldNames = @()
-    $records    = [System.Collections.Generic.List[hashtable]]::new()
+    $fieldNames  = @()
+    $records     = [System.Collections.Generic.List[hashtable]]::new()
+    $isFirstLine = $true
 
     # Open with FileShare.ReadWrite so we can read files Exchange currently has open for writing.
     $fs     = [System.IO.FileStream]::new($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
@@ -123,13 +124,32 @@ function Parse-W3CLogFile {
     $line = $null
     while (($line = $reader.ReadLine()) -ne $null) {
         if ($line.StartsWith('#Fields:')) {
-            # Parse header: "#Fields: field1,field2,..."
-            $fieldNames = $line.Substring(8).Trim() -split ','
+            # Standard W3C fields header: "#Fields: field1,field2,..."
+            $fieldNames  = $line.Substring(8).Trim() -split ','
+            $isFirstLine = $false
             continue
         }
         if ($line.StartsWith('#') -or [string]::IsNullOrWhiteSpace($line)) {
+            $isFirstLine = $false
             continue
         }
+
+        # Exchange logs start with an undecorated field-name line (no '#Fields:' prefix)
+        # before the #Software/#Version/etc. comment block.  Detect it by checking that
+        # we haven't seen any data yet and that every comma-separated token looks like
+        # a valid identifier (letters/digits only – no spaces, no colons).
+        if ($isFirstLine -and $fieldNames.Count -eq 0) {
+            $isFirstLine = $false
+            $tokens = $line -split ','
+            $looksLikeHeader = $tokens.Count -ge 3 -and
+                               ($tokens | Where-Object { $_ -match '[^A-Za-z0-9_]' }).Count -eq 0
+            if ($looksLikeHeader) {
+                $fieldNames = $tokens
+                continue
+            }
+        }
+        $isFirstLine = $false
+
         if ($fieldNames.Count -eq 0) { continue }
 
         # Exchange logs are comma-delimited; quoted fields can contain commas.
@@ -186,7 +206,7 @@ function Split-CsvLine {
 
 function Extract-IPFromEndpoint {
     <#
-    Exchange logs endpoints as "1.2.3.4:143" or "[::1]:143".
+    Exchange logs endpoints as "1.2.3.4:995" or "[::1]:993".
     Returns only the IP part.
     #>
     param([string]$Endpoint)
@@ -202,11 +222,73 @@ function Extract-IPFromEndpoint {
     return $Endpoint
 }
 
+function Get-ContextResult {
+    <#
+    Exchange protocol logs store the result of each command in the 'context' field.
+    Format: R=OK   or   R=OK;Msg="Proxy:...;ProxySuccess";ActivityContextData=...
+            R=SomeErrorCode;Msg="Error description";...
+
+    Returns a hashtable: @{ Success = $true/$false; Error = 'message or empty' }
+    #>
+    param([string]$Context)
+
+    if ([string]::IsNullOrEmpty($Context)) {
+        return @{ Success = $false; Error = 'No response context' }
+    }
+
+    # Extract the R= value (first token up to ; or end of string)
+    $rValue = ''
+    if ($Context -match '(?:^|,)R=([^;,]+)') {
+        $rValue = $Matches[1].Trim()
+    }
+
+    if ($rValue -eq 'OK') {
+        return @{ Success = $true; Error = '' }
+    }
+
+    # Extract Msg= value for a readable error description
+    $msg = ''
+    if ($Context -match 'Msg=""([^""]+)""') {
+        $msg = $Matches[1].Trim()
+        # Proxy success buried in R=OK scenarios shouldn't appear here, but clean up proxy strings
+        $msg = $msg -replace ';ProxySuccess$', '' -replace '^Proxy:[^;]+;', ''
+    }
+
+    $error = if ($msg) { "$rValue - $msg" } elseif ($rValue) { $rValue } else { $Context }
+    return @{ Success = $false; Error = $error }
+}
+
+function Get-RecordField {
+    <#
+    Safe field accessor for log record hashtables.
+    Returns empty string if field doesn't exist.
+    #>
+    param([hashtable]$Record, [string[]]$Names)
+    foreach ($n in $Names) {
+        if ($Record.ContainsKey($n) -and $Record[$n] -ne '-') { return $Record[$n] }
+    }
+    return ''
+}
+
 #endregion
 
 #region ── IMAP4 Log Parser ───────────────────────────────────────────────────
 
 function Parse-ImapLogs {
+    <#
+    Exchange IMAP4 log format (Exchange 2013/2016/2019):
+      Fields: dateTime, sessionId, seqNumber, sIp, cIp, user,
+              duration, rqsize, rpsize, command, parameters, context, puid
+
+    Authentication commands:
+      login       - LOGIN username *  (password masked as *)
+                    context contains result: R=OK or R=<ErrorCode>
+      authenticate - AUTHENTICATE PLAIN/LOGIN/NTLM
+                    user field contains authenticated username
+                    context contains result
+
+    Both frontend (IMAP4) and backend (IMAP4BE) logs share this format.
+    #>
     param(
         [string]$LogDirectory,
         [datetime]$Start,
@@ -233,9 +315,6 @@ function Parse-ImapLogs {
     foreach ($file in $logFiles) {
         Write-Verbose "  Reading: $($file.Name)"
 
-        # Per-session state: sessionId -> { ClientIP, User, LastLoginCmd, LastAuthMethod }
-        $sessions = @{}
-
         try {
             $records = Parse-W3CLogFile -Path $file.FullName
         }
@@ -245,87 +324,54 @@ function Parse-ImapLogs {
         }
 
         foreach ($rec in $records) {
-            # Timestamp field is usually "date-time" or "DateTime"
-            $tsField = if ($rec.ContainsKey('date-time')) { 'date-time' } else { 'DateTime' }
-            if (-not $rec.ContainsKey($tsField)) { continue }
-
-            $ts = [datetime]::MinValue
-            if (-not [datetime]::TryParse($rec[$tsField], [ref]$ts)) { continue }
+            # ── Timestamp ────────────────────────────────────────────────────
+            $tsRaw = Get-RecordField $rec 'dateTime','date-time','DateTime'
+            $ts    = [datetime]::MinValue
+            if (-not $tsRaw -or -not [datetime]::TryParse($tsRaw, [ref]$ts)) { continue }
             if ($ts -lt $Start -or $ts -gt $End) { continue }
 
-            $sessionId = if ($rec.ContainsKey('session')) { $rec['session'] } else { '' }
-            $event     = if ($rec.ContainsKey('event'))   { $rec['event'].ToUpper() } else { '' }
-            $data      = if ($rec.ContainsKey('data'))    { $rec['data'] }  else { '' }
-            $remoteEp  = if ($rec.ContainsKey('remote-endpoint')) { $rec['remote-endpoint'] } else { '-' }
-            $clientIP  = Extract-IPFromEndpoint $remoteEp
+            # ── Fields ───────────────────────────────────────────────────────
+            $cmd       = (Get-RecordField $rec 'command').ToLower()
+            $params    = Get-RecordField $rec 'parameters'
+            $context   = Get-RecordField $rec 'context'
+            $userField = Get-RecordField $rec 'user'
+            $clientIP  = Extract-IPFromEndpoint (Get-RecordField $rec 'cIp','remote-endpoint')
 
-            # Initialise session tracking
-            if ($sessionId -and -not $sessions.ContainsKey($sessionId)) {
-                $sessions[$sessionId] = @{
-                    ClientIP       = $clientIP
-                    User           = ''
-                    PendingLogin   = $false
-                    AuthMethod     = ''
-                    LastCmdTag     = ''
-                }
+            # ── LOGIN command: "username *"  (password is masked) ────────────
+            if ($cmd -eq 'login') {
+                $username = if ($params -match '^(\S+)\s+\*') { $Matches[1] }
+                            elseif ($params)                   { $params }
+                            else                               { $userField }
+
+                $result = Get-ContextResult $context
+                $authEvents.Add([pscustomobject]@{
+                    Timestamp  = $ts
+                    Protocol   = 'IMAP4'
+                    ClientIP   = $clientIP
+                    Username   = $username
+                    AuthMethod = 'LOGIN'
+                    Success    = $result.Success
+                    Error      = $result.Error
+                    LogFile    = $file.Name
+                })
             }
-            $sess = if ($sessionId) { $sessions[$sessionId] } else { @{ ClientIP = $clientIP; User = ''; PendingLogin = $false; AuthMethod = ''; LastCmdTag = '' } }
 
-            # Update IP (might change in proxy scenarios)
-            if ($clientIP -ne '-') { $sess.ClientIP = $clientIP }
+            # ── AUTHENTICATE command (SASL: PLAIN, LOGIN, NTLM, etc.) ────────
+            elseif ($cmd -eq 'authenticate') {
+                $mechanism = $params   # e.g. "PLAIN", "LOGIN", "NTLM"
+                $username  = $userField   # populated by Exchange after SASL completes
 
-            switch ($event) {
-                'COMMAND' {
-                    # IMAP command line, e.g.:  "A001 LOGIN user@domain *"
-                    #                     or:  "A001 AUTHENTICATE PLAIN"
-                    if ($data -match '^(\S+)\s+(LOGIN|AUTHENTICATE)\s+(\S+)') {
-                        $sess.LastCmdTag   = $Matches[1]
-                        $sess.AuthMethod   = $Matches[2].ToUpper()
-                        $rawUser           = $Matches[3]
-                        # Password is 4th token for LOGIN; strip it
-                        $sess.User         = $rawUser -replace '\s+\S+$', ''
-                        $sess.PendingLogin  = $true
-                    }
-                }
-                'RESPONSE' {
-                    if ($sess.PendingLogin) {
-                        # Tagged OK = success, NO or BAD = failure
-                        $success = $false
-                        $errMsg  = ''
-
-                        if ($data -match "^$([regex]::Escape($sess.LastCmdTag))\s+OK\b") {
-                            $success = $true
-                        }
-                        elseif ($data -match "^$([regex]::Escape($sess.LastCmdTag))\s+(NO|BAD)\b(.*)") {
-                            $errMsg = $Matches[2].Trim() -replace '^\[.*?\]\s*', ''
-                            if (-not $errMsg) { $errMsg = $data }
-                        }
-                        else {
-                            # Untagged continuation – skip
-                            continue
-                        }
-
-                        $authEvents.Add([pscustomobject]@{
-                            Timestamp  = $ts
-                            Protocol   = 'IMAP4'
-                            ClientIP   = $sess.ClientIP
-                            Username   = $sess.User
-                            AuthMethod = $sess.AuthMethod
-                            Success    = $success
-                            Error      = if ($success) { '' } else { if ($errMsg) { $errMsg } else { 'Authentication failed' } }
-                            LogFile    = $file.Name
-                        })
-
-                        $sess.PendingLogin = $false
-                        $sess.User         = ''
-                        $sess.AuthMethod   = ''
-                        $sess.LastCmdTag   = ''
-                    }
-                }
-                'CONNECT' {
-                    # Refresh IP on new connection
-                    if ($clientIP -ne '-') { $sess.ClientIP = $clientIP }
-                }
+                $result = Get-ContextResult $context
+                $authEvents.Add([pscustomobject]@{
+                    Timestamp  = $ts
+                    Protocol   = 'IMAP4'
+                    ClientIP   = $clientIP
+                    Username   = $username
+                    AuthMethod = "AUTH $mechanism"
+                    Success    = $result.Success
+                    Error      = $result.Error
+                    LogFile    = $file.Name
+                })
             }
         }
     }
@@ -338,6 +384,24 @@ function Parse-ImapLogs {
 #region ── POP3 Log Parser ────────────────────────────────────────────────────
 
 function Parse-Pop3Logs {
+    <#
+    Exchange POP3 log format (Exchange 2013/2016/2019):
+      Fields: dateTime, sessionId, seqNumber, sIp, cIp, user,
+              duration, rqsize, rpsize, command, parameters, context, puid
+
+    Authentication flow:
+      user command  - client sends username
+                      parameters = the username sent
+                      context = R=OK (server acknowledged)
+      pass command  - client sends password (masked as *****)
+                      context = R=OK;Msg="Proxy:...;ProxySuccess"   → success
+                      context = R=<ErrorCode>;Msg="..."              → failure
+
+    Session tracking is needed because username (from 'user' row) and
+    auth result (from 'pass' row) are in separate log records.
+    The 'user' field in the 'pass' row is truncated – always prefer
+    the full username captured from the 'user' command row.
+    #>
     param(
         [string]$LogDirectory,
         [datetime]$Start,
@@ -364,6 +428,7 @@ function Parse-Pop3Logs {
     foreach ($file in $logFiles) {
         Write-Verbose "  Reading: $($file.Name)"
 
+        # Per-session tracking: sessionId → { User, ClientIP, AuthTimestamp }
         $sessions = @{}
 
         try {
@@ -375,80 +440,82 @@ function Parse-Pop3Logs {
         }
 
         foreach ($rec in $records) {
-            $tsField = if ($rec.ContainsKey('date-time')) { 'date-time' } else { 'DateTime' }
-            if (-not $rec.ContainsKey($tsField)) { continue }
-
-            $ts = [datetime]::MinValue
-            if (-not [datetime]::TryParse($rec[$tsField], [ref]$ts)) { continue }
+            # ── Timestamp ────────────────────────────────────────────────────
+            $tsRaw = Get-RecordField $rec 'dateTime','date-time','DateTime'
+            $ts    = [datetime]::MinValue
+            if (-not $tsRaw -or -not [datetime]::TryParse($tsRaw, [ref]$ts)) { continue }
             if ($ts -lt $Start -or $ts -gt $End) { continue }
 
-            $sessionId = if ($rec.ContainsKey('session')) { $rec['session'] } else { '' }
-            $event     = if ($rec.ContainsKey('event'))   { $rec['event'].ToUpper() } else { '' }
-            $data      = if ($rec.ContainsKey('data'))    { $rec['data'] }  else { '' }
-            $remoteEp  = if ($rec.ContainsKey('remote-endpoint')) { $rec['remote-endpoint'] } else { '-' }
-            $clientIP  = Extract-IPFromEndpoint $remoteEp
+            # ── Fields ───────────────────────────────────────────────────────
+            $sessionId = Get-RecordField $rec 'sessionId','session'
+            $cmd       = (Get-RecordField $rec 'command').ToLower()
+            $params    = Get-RecordField $rec 'parameters'
+            $context   = Get-RecordField $rec 'context'
+            $userField = Get-RecordField $rec 'user'
+            $clientIP  = Extract-IPFromEndpoint (Get-RecordField $rec 'cIp','remote-endpoint')
 
+            # Initialise session entry
             if ($sessionId -and -not $sessions.ContainsKey($sessionId)) {
                 $sessions[$sessionId] = @{
-                    ClientIP      = $clientIP
                     User          = ''
-                    PassSent      = $false
+                    ClientIP      = $clientIP
                     AuthTimestamp = $ts
                 }
             }
-            $sess = if ($sessionId) { $sessions[$sessionId] } else { @{ ClientIP = $clientIP; User = ''; PassSent = $false; AuthTimestamp = $ts } }
-
+            $sess = if ($sessionId) { $sessions[$sessionId] } else {
+                @{ User = ''; ClientIP = $clientIP; AuthTimestamp = $ts }
+            }
             if ($clientIP -ne '-') { $sess.ClientIP = $clientIP }
 
-            switch ($event) {
-                'COMMAND' {
-                    # POP3 command lines: "USER user@domain" or "PASS *" or "AUTH PLAIN"
-                    if ($data -match '^USER\s+(\S+)') {
-                        $sess.User          = $Matches[1]
-                        $sess.PassSent      = $false
-                        $sess.AuthTimestamp = $ts
-                    }
-                    elseif ($data -match '^PASS\b') {
-                        $sess.PassSent = $true
-                    }
-                    elseif ($data -match '^AUTH\s+(\S+)') {
-                        # SASL AUTH (AUTH PLAIN, AUTH LOGIN, etc.)
-                        $sess.PassSent      = $true   # AUTH is a single round-trip for POP3
-                        $sess.AuthTimestamp = $ts
-                    }
+            switch ($cmd) {
+                'user' {
+                    # 'parameters' has the full username as typed by the client
+                    # (could be domain\user, user@domain, or plain user)
+                    $sess.User          = if ($params) { $params } else { $userField }
+                    $sess.AuthTimestamp = $ts
                 }
-                'RESPONSE' {
-                    if ($sess.PassSent -and $sess.User) {
-                        $success = $false
-                        $errMsg  = ''
 
-                        if ($data -match '^\+OK\b') {
-                            $success = $true
-                        }
-                        elseif ($data -match '^-ERR\s*(.*)') {
-                            $errMsg = $Matches[1].Trim()
-                        }
-                        else {
-                            continue
-                        }
+                'pass' {
+                    # Auth result is in the context field of this very row.
+                    # Use full username from session; fall back to (possibly truncated) user field.
+                    $username = if ($sess.User) { $sess.User } else { $userField }
+                    $result   = Get-ContextResult $context
 
+                    if ($username) {
                         $authEvents.Add([pscustomobject]@{
                             Timestamp  = $sess.AuthTimestamp
                             Protocol   = 'POP3'
                             ClientIP   = $sess.ClientIP
-                            Username   = $sess.User
+                            Username   = $username
                             AuthMethod = 'USER/PASS'
-                            Success    = $success
-                            Error      = if ($success) { '' } else { if ($errMsg) { $errMsg } else { 'Authentication failed' } }
+                            Success    = $result.Success
+                            Error      = $result.Error
                             LogFile    = $file.Name
                         })
-
-                        $sess.PassSent = $false
-                        $sess.User     = ''
                     }
+                    $sess.User = ''
                 }
-                'CONNECT' {
-                    if ($clientIP -ne '-') { $sess.ClientIP = $clientIP }
+
+                'auth' {
+                    # SASL authentication (AUTH PLAIN, AUTH LOGIN, etc.)
+                    # Username is in the user field after SASL completes.
+                    $mechanism = $params
+                    $username  = if ($sess.User) { $sess.User } else { $userField }
+                    $result    = Get-ContextResult $context
+
+                    if ($username -and $context) {
+                        $authEvents.Add([pscustomobject]@{
+                            Timestamp  = $ts
+                            Protocol   = 'POP3'
+                            ClientIP   = $sess.ClientIP
+                            Username   = $username
+                            AuthMethod = "AUTH $mechanism"
+                            Success    = $result.Success
+                            Error      = $result.Error
+                            LogFile    = $file.Name
+                        })
+                    }
+                    $sess.User = ''
                 }
             }
         }
