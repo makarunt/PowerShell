@@ -649,15 +649,13 @@ Write-Host "  POP3 logs  : $PopLogPath"
 Write-Host ""
 
 # ── Parse logs ───────────────────────────────────────────────────────────────
-$allEvents = [System.Collections.Generic.List[pscustomobject]]::new()
-
 Write-Host "[1/2] Processing IMAP4 logs..." -ForegroundColor Yellow
-[object[]]$imapEvents = @(Parse-ImapLogs -LogDirectory $ImapLogPath -Start $StartDate -End $EndDate)
-if ($imapEvents.Count -gt 0) { $allEvents.AddRange($imapEvents) }
-
 Write-Host "[2/2] Processing POP3 logs..." -ForegroundColor Yellow
-[object[]]$popEvents = @(Parse-Pop3Logs -LogDirectory $PopLogPath -Start $StartDate -End $EndDate)
-if ($popEvents.Count -gt 0) { $allEvents.AddRange($popEvents) }
+
+$allEvents = @(
+    Parse-ImapLogs -LogDirectory $ImapLogPath -Start $StartDate -End $EndDate
+    Parse-Pop3Logs -LogDirectory $PopLogPath  -Start $StartDate -End $EndDate
+) | Where-Object { $_ -ne $null }
 
 Write-Host ""
 
