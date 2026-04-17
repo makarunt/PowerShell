@@ -229,7 +229,8 @@ foreach ($policy in $policies) {
         "LDAP Filter (Custom)"   = if ($filterType -eq 'Custom') { $ldapFilter } else { "" }
         "Predlosci Email Adresa" = $templates
         "Broj Primatelja"        = $recipientCount
-        "Zadnja Primjena"        = ConvertTo-DateString -Value $policy.LastUpdatedRecipientFilter
+        "Kreirano"               = ConvertTo-DateString -Value $policy.WhenCreated
+        "Zadnja Izmjena"         = ConvertTo-DateString -Value $policy.WhenChanged
         "Exchange Organizacija"  = $policy.OrganizationId
     }
 
