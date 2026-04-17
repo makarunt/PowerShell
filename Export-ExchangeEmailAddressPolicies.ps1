@@ -229,7 +229,7 @@ foreach ($policy in $policies) {
         "LDAP Filter (Custom)"   = if ($filterType -eq 'Custom') { $ldapFilter } else { "" }
         "Predlosci Email Adresa" = $templates
         "Broj Primatelja"        = $recipientCount
-        "Primjenjen"             = if ($policy.RecipientFilterApplied) { "Da" } else { "Ne - potreban Update-EmailAddressPolicy" }
+        "Status"                 = if ($policy.RecipientFilterApplied) { "Applied" } else { "Unapplied" }
         "Kreirano"               = ConvertTo-DateString -Value $policy.WhenCreated
         "Zadnja Izmjena"         = ConvertTo-DateString -Value $policy.WhenChanged
     }
