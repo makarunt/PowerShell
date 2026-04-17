@@ -169,14 +169,7 @@ function ConvertTo-DateString {
 
 #region --- Dohvacanje i obrada Email Address Policies ---
 
-Write-Host "`nDohvacam Exchange organizaciju i Email Address Policies..." -ForegroundColor Cyan
-
-try {
-    $orgName = (Get-OrganizationConfig -ErrorAction Stop).Name
-}
-catch {
-    $orgName = "N/A"
-}
+Write-Host "`nDohvacam Email Address Policies..." -ForegroundColor Cyan
 
 try {
     $policies = Get-EmailAddressPolicy -ErrorAction Stop | Sort-Object Priority
@@ -236,9 +229,9 @@ foreach ($policy in $policies) {
         "LDAP Filter (Custom)"   = if ($filterType -eq 'Custom') { $ldapFilter } else { "" }
         "Predlosci Email Adresa" = $templates
         "Broj Primatelja"        = $recipientCount
+        "Primjenjen"             = if ($policy.RecipientFilterApplied) { "Da" } else { "Ne - potreban Update-EmailAddressPolicy" }
         "Kreirano"               = ConvertTo-DateString -Value $policy.WhenCreated
         "Zadnja Izmjena"         = ConvertTo-DateString -Value $policy.WhenChanged
-        "Exchange Organizacija"  = $orgName
     }
 
     $results.Add($row)
