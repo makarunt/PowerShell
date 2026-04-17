@@ -169,7 +169,14 @@ function ConvertTo-DateString {
 
 #region --- Dohvacanje i obrada Email Address Policies ---
 
-Write-Host "`nDohvacam Email Address Policies..." -ForegroundColor Cyan
+Write-Host "`nDohvacam Exchange organizaciju i Email Address Policies..." -ForegroundColor Cyan
+
+try {
+    $orgName = (Get-OrganizationConfig -ErrorAction Stop).Name
+}
+catch {
+    $orgName = "N/A"
+}
 
 try {
     $policies = Get-EmailAddressPolicy -ErrorAction Stop | Sort-Object Priority
@@ -231,7 +238,7 @@ foreach ($policy in $policies) {
         "Broj Primatelja"        = $recipientCount
         "Kreirano"               = ConvertTo-DateString -Value $policy.WhenCreated
         "Zadnja Izmjena"         = ConvertTo-DateString -Value $policy.WhenChanged
-        "Exchange Organizacija"  = $policy.OrganizationId
+        "Exchange Organizacija"  = $orgName
     }
 
     $results.Add($row)
