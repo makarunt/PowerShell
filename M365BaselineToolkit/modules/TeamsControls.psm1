@@ -191,6 +191,15 @@ function Set-Teams-MeetingJoinDefaultsState {
         Optional pre-fetched current value.
     .EXAMPLE
         Set-Teams-MeetingJoinDefaultsState -DesiredValue ([pscustomobject]@{autoAdmittedUsers='EveryoneInCompanyExcludingGuests';allowAnonymousUsersToJoinMeeting=$false})
+    .NOTES
+        Documented MicrosoftTeams module issue: Set-CsTeamsMeetingPolicy can report
+        a false-positive HTTP 40301 "Forbidden" when called with -ErrorAction Stop,
+        even though the underlying change is applied successfully - the same class
+        of bug as the one found in Get-ExternalInOutlook (see
+        ExchangeOnlineControls.psm1). See
+        https://learn.microsoft.com/answers/questions/5819041. So this call is made
+        without an explicit -ErrorAction, and on any error we verify by reading the
+        policy back rather than trusting the cmdlet's reported failure.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -206,10 +215,15 @@ function Set-Teams-MeetingJoinDefaultsState {
     if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
         return [pscustomobject]@{ Id = 'Teams-MeetingJoinDefaults'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    Set-CsTeamsMeetingPolicy -Identity Global `
-        -AutoAdmittedUsers ([string]$DesiredValue.autoAdmittedUsers) `
-        -AllowAnonymousUsersToJoinMeeting:([bool]$DesiredValue.allowAnonymousUsersToJoinMeeting) `
-        -ErrorAction Stop
+    try {
+        Set-CsTeamsMeetingPolicy -Identity Global `
+            -AutoAdmittedUsers ([string]$DesiredValue.autoAdmittedUsers) `
+            -AllowAnonymousUsersToJoinMeeting:([bool]$DesiredValue.allowAnonymousUsersToJoinMeeting)
+    }
+    catch {
+        $verify = (Get-Teams-MeetingJoinDefaultsState).Value
+        if (-not (Compare-BaselineValueDeep -Left $verify -Right $DesiredValue)) { throw }
+    }
     return [pscustomobject]@{ Id = 'Teams-MeetingJoinDefaults'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated CsTeamsMeetingPolicy Global.' }
 }
 
