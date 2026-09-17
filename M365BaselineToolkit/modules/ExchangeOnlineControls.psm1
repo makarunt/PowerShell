@@ -248,26 +248,29 @@ function Get-ExchangeOnline-ExternalSenderTagState {
     .SYNOPSIS
         Reads whether Outlook tags external-sender messages.
     .DESCRIPTION
-        Confirmed via a live tenant's exception stack trace: Get-ExternalInOutlook
-        has its own internal retry logic (Execute-Command -> CheckRetryAndHandleWaitTime)
-        that calls Write-Error as part of a retry step, and the same call has been
-        observed succeeding immediately when run interactively moments later - this
-        is intermittent backend flakiness in that specific cmdlet (Microsoft's own
-        error text says as much: "Please try again after some time"), not something
-        fully solvable with error-handling alone. -ErrorAction SilentlyContinue on
-        the call itself (proven more reliable than overriding the
-        $ErrorActionPreference variable, which does not reliably cross the module
-        boundary into Get-ExternalInOutlook's own internal helper functions) keeps a
-        mid-retry Write-Error from aborting this call under the toolkit's global
-        $ErrorActionPreference = 'Stop'; on top of that, this function retries the
-        whole call up to 3 times with a short delay, since a single attempt can
-        still land during a transient backend hiccup.
+        Confirmed against a live tenant: Get-ExternalInOutlook's backing endpoint
+        (a /adminapi/beta/... REST call, per its own exception stack trace) returns
+        HTTP 403 when called immediately after a burst of several other Exchange
+        Online reads in the same session - reproduced standalone, entirely outside
+        this toolkit, by firing the other ExchangeOnline-* controls' cmdlets first
+        and then calling Get-ExternalInOutlook right after; an isolated call with no
+        preceding burst always succeeds. This audit calls 7-8 other Exchange Online
+        cmdlets in the second or two before it reaches this control, which is enough
+        to trip whatever rate limit that beta endpoint has - Microsoft's own error
+        handling then fails to decode the real 403 response body (a
+        compression/JSON-parsing bug in its own fallback path) and reports a generic
+        "server side error" instead of the real reason. A short pause before the
+        first attempt gives that window time to clear; -ErrorAction SilentlyContinue
+        on the call itself keeps a mid-retry Write-Error inside
+        Get-ExternalInOutlook's own implementation from aborting under this
+        toolkit's global $ErrorActionPreference = 'Stop'.
     .EXAMPLE
         Get-ExchangeOnline-ExternalSenderTagState
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param()
+    Start-Sleep -Seconds 5
     $maxAttempts = 3
     $lastError = $null
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
@@ -280,9 +283,9 @@ function Get-ExchangeOnline-ExternalSenderTagState {
         # ToString(), so this can't itself throw under StrictMode the way a property
         # chain that assumes one specific object shape can.
         $lastError = if ($getError -and $getError.Count -gt 0) { [string]$getError[0] } else { 'no result returned' }
-        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
+        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 10 }
     }
-    throw "Get-ExternalInOutlook failed after $maxAttempts attempt(s): $lastError"
+    throw "Get-ExternalInOutlook failed after $maxAttempts attempt(s), each preceded by a pause to clear any rate limit from preceding calls: $lastError"
 }
 
 function Set-ExchangeOnline-ExternalSenderTagState {
