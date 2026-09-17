@@ -247,13 +247,26 @@ function Get-ExchangeOnline-ExternalSenderTagState {
     <#
     .SYNOPSIS
         Reads whether Outlook tags external-sender messages.
+    .DESCRIPTION
+        Get-ExternalInOutlook has been observed writing a non-terminating error
+        even on an otherwise-successful call in some tenants - harmless when run
+        interactively under PowerShell's default error handling, but this
+        toolkit runs with $ErrorActionPreference = 'Stop' globally, which
+        promotes that into a terminating failure before the cmdlet can return
+        its real result. -ErrorAction SilentlyContinue overrides that for just
+        this call so it can finish normally; a genuine failure still surfaces
+        below, since $cfg would then be empty.
     .EXAMPLE
         Get-ExchangeOnline-ExternalSenderTagState
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param()
-    $cfg = Get-ExternalInOutlook -ErrorAction Stop
+    $cfg = Get-ExternalInOutlook -ErrorAction SilentlyContinue -ErrorVariable getError
+    if (-not $cfg) {
+        $detail = if ($getError) { $getError[0].Exception.Message } else { 'no result returned' }
+        throw "Get-ExternalInOutlook failed: $detail"
+    }
     return [pscustomobject]@{ Id = 'ExchangeOnline-ExternalSenderTag'; Value = [bool]$cfg.Enabled }
 }
 
