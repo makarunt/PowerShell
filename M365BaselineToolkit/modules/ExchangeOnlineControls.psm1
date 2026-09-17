@@ -248,27 +248,27 @@ function Get-ExchangeOnline-ExternalSenderTagState {
     .SYNOPSIS
         Reads whether Outlook tags external-sender messages.
     .DESCRIPTION
-        Confirmed against a live tenant: Get-ExternalInOutlook's backing endpoint
-        (a /adminapi/beta/... REST call, per its own exception stack trace) returns
-        HTTP 403 when called immediately after a burst of several other Exchange
-        Online reads in the same session - reproduced standalone, entirely outside
-        this toolkit, by firing the other ExchangeOnline-* controls' cmdlets first
-        and then calling Get-ExternalInOutlook right after; an isolated call with no
-        preceding burst always succeeds. Padding this call with sleeps could not
-        reliably outwait it (confirmed on a second, unrelated tenant/machine), so
-        the actual fix is structural: config/baseline.config.json orders
-        ExchangeOnline-ExternalSenderTag first among the ExchangeOnline-* controls,
-        so this read happens before the burst of other Exchange Online calls this
-        audit makes, not after it - removing the trigger condition rather than
-        trying to wait it out. (Microsoft's own error handling separately fails to
-        decode the real 403 response body - a compression/JSON-parsing bug in its
-        own fallback path - and reports a generic "server side error" instead of
-        the real reason; that's what masked the actual cause for a while.) The
-        short retry below is just an ordinary safety net for genuine transient
-        blips, not a rate-limit workaround. -ErrorAction SilentlyContinue on the
-        call itself keeps a mid-retry Write-Error inside Get-ExternalInOutlook's
-        own implementation from aborting under this toolkit's global
-        $ErrorActionPreference = 'Stop'.
+        Confirmed against a live tenant, isolated down to a single variable:
+        Get-ExternalInOutlook called completely bare (no -ErrorAction/-ErrorVariable)
+        succeeds reliably, including repeatedly back-to-back - ruling out rate
+        limiting. The exact same call made with -ErrorAction SilentlyContinue
+        -ErrorVariable fails with HTTP 403 every time, in the same session,
+        immediately after a bare call just succeeded. Those two parameters can't
+        change what goes over the wire - they're purely local to this PowerShell
+        session - but passing -ErrorAction directly to a cmdlet also sets
+        $ErrorActionPreference to that value *inside that cmdlet's own function
+        body* for the duration of the call (standard common-parameter behavior).
+        Get-ExternalInOutlook's own implementation has internal transient-error
+        handling around its REST call, and it evidently keys off its own
+        $ErrorActionPreference to decide whether to retry quietly before giving
+        up - SilentlyContinue disables that retry, which is exactly what breaks
+        it here. So this call must be made bare, exactly like the interactive
+        tests that always succeed, with our own try/catch as the safety net
+        instead of the cmdlet's -ErrorAction parameter. (Microsoft's own error
+        handling separately fails to decode the real 403 response body - a
+        compression/JSON-parsing bug in its own fallback path - and reports a
+        generic "server side error" instead of the real reason; that's what
+        masked the actual cause for a while.)
     .EXAMPLE
         Get-ExchangeOnline-ExternalSenderTagState
     #>
@@ -278,15 +278,17 @@ function Get-ExchangeOnline-ExternalSenderTagState {
     $maxAttempts = 2
     $lastError = $null
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-        $cfg = Get-ExternalInOutlook -ErrorAction SilentlyContinue -ErrorVariable getError
+        try {
+            $cfg = Get-ExternalInOutlook
+        }
+        catch {
+            $cfg = $null
+            $lastError = [string]$_
+        }
         if ($cfg) {
             return [pscustomobject]@{ Id = 'ExchangeOnline-ExternalSenderTag'; Value = [bool]$cfg.Enabled }
         }
-        # Plain string conversion rather than .Exception.Message: whatever lands in
-        # $getError[0] (a normal ErrorRecord most of the time) always has a sane
-        # ToString(), so this can't itself throw under StrictMode the way a property
-        # chain that assumes one specific object shape can.
-        $lastError = if ($getError -and $getError.Count -gt 0) { [string]$getError[0] } else { 'no result returned' }
+        if (-not $lastError) { $lastError = 'no result returned' }
         if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 3 }
     }
     throw "Get-ExternalInOutlook failed after $maxAttempts attempt(s): $lastError"
