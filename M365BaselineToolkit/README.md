@@ -128,6 +128,18 @@ being *read* (e.g. insufficient permissions) — this is distinct from a
 control simply being non-compliant, which is an expected finding, not an
 error.
 
+**Re-running in the same window and don't want to sign in again 4 times?**
+By default every run disconnects from Graph/Exchange Online/Teams/SharePoint
+when it finishes, even on failure, so no session is left authenticated
+longer than one run. Add `-KeepConnectionsOpen` to skip that teardown while
+you're iterating — each `Connect-*` cmdlet silently reuses the existing
+session instead of prompting again:
+```powershell
+./Invoke-M365Baseline.ps1 -Mode Audit -SharePointAdminUrl https://contoso-admin.sharepoint.com -KeepConnectionsOpen
+```
+Close the PowerShell window when you're actually done to clear the sessions
+for good. This flag works the same way in Apply/Restore.
+
 ### Apply — backs up, then converges non-compliant controls
 
 ```powershell

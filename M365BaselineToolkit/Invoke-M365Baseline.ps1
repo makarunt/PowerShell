@@ -49,6 +49,15 @@
     external federation" configuration.
 .PARAMETER IncludeHtmlReport
     Also write an HTML copy of every Markdown report.
+.PARAMETER KeepConnectionsOpen
+    Skip disconnecting from Graph/Exchange Online/Teams/SharePoint at the end
+    of the run. By default every connection is torn down when the script
+    finishes, even on failure, so nothing is left authenticated longer than
+    one run. Pass this switch while iterating/testing in the same PowerShell
+    window to avoid re-authenticating (up to 4 sign-ins) on every re-run -
+    each Connect-* cmdlet reuses its existing session silently when one is
+    already active. Close the PowerShell window when you're done to clear
+    the sessions for good.
 .EXAMPLE
     ./Invoke-M365Baseline.ps1 -Mode Audit
     Audits every enabled control and writes reports/backups. No changes made.
@@ -101,7 +110,10 @@ param(
     [switch]$AcknowledgeFederationBlockAll,
 
     [Parameter()]
-    [switch]$IncludeHtmlReport
+    [switch]$IncludeHtmlReport,
+
+    [Parameter()]
+    [switch]$KeepConnectionsOpen
 )
 
 $ErrorActionPreference = 'Stop'
@@ -269,8 +281,15 @@ catch {
     $exitCode = 1
 }
 finally {
-    foreach ($conn in $connectedServices) {
-        Disconnect-BaselineWorkload -Connection $conn
+    if ($KeepConnectionsOpen) {
+        if ($connectedServices.Count -gt 0) {
+            Write-BaselineHost "`n-KeepConnectionsOpen set: leaving $($connectedServices -join ', ') connected. Close this PowerShell window when you're done to clear the sessions." 'Yellow'
+        }
+    }
+    else {
+        foreach ($conn in $connectedServices) {
+            Disconnect-BaselineWorkload -Connection $conn
+        }
     }
 }
 
