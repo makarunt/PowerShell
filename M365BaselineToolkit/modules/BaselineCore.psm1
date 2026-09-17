@@ -624,7 +624,18 @@ function Connect-BaselineWorkload {
             }
             'ExchangeOnline' {
                 Import-Module ExchangeOnlineManagement -ErrorAction Stop
-                Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+                # ExchangeOnlineManagement 3.7+ enables Windows Account Manager (WAM)
+                # sign-in by default, which is known to crash with a NullReferenceException
+                # in Microsoft.Identity.Client's RuntimeBroker when another module (e.g.
+                # Microsoft.Graph) has already used MSAL earlier in the same process - see
+                # https://github.com/microsoftgraph/msgraph-sdk-powershell/issues/3576.
+                # -DisableWAM falls back to the older, broker-free interactive browser flow.
+                # Passed only if the installed module version actually supports it.
+                $eopParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
+                if ((Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')) {
+                    $eopParams['DisableWAM'] = $true
+                }
+                Connect-ExchangeOnline @eopParams
             }
             'Teams' {
                 Import-Module MicrosoftTeams -ErrorAction Stop
