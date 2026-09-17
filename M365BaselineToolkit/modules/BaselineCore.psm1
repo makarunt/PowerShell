@@ -504,6 +504,15 @@ function Test-BaselineRequiredModule {
     <#
     .SYNOPSIS
         Checks whether a required PowerShell module is installed.
+    .DESCRIPTION
+        Microsoft.Online.SharePoint.PowerShell is a special case: it's only ever
+        loaded inside a Windows PowerShell 5.1 compatibility session (via
+        Connect-BaselineWorkload's -UseWindowsPowerShell import), which has its
+        own separate CurrentUser module path from PowerShell 7
+        (Documents\WindowsPowerShell\Modules vs. Documents\PowerShell\Modules on
+        Windows). Checking with Get-Module from inside PS7 would answer whether
+        PS7 can see it, not whether that compatibility session can - so this one
+        module is checked via a real Windows PowerShell 5.1 process instead.
     .PARAMETER Name
         Module name.
     .EXAMPLE
@@ -515,6 +524,10 @@ function Test-BaselineRequiredModule {
         [Parameter(Mandatory)]
         [string]$Name
     )
+    if ($Name -eq 'Microsoft.Online.SharePoint.PowerShell') {
+        $output = & powershell.exe -NoProfile -Command "[bool](Get-Module -ListAvailable -Name '$Name')" 2>$null
+        return ([string]$output).Trim() -eq 'True'
+    }
     return [bool](Get-Module -ListAvailable -Name $Name | Select-Object -First 1)
 }
 
@@ -522,6 +535,12 @@ function Install-BaselineRequiredModule {
     <#
     .SYNOPSIS
         Installs a required module from PSGallery for the current user.
+    .DESCRIPTION
+        Microsoft.Online.SharePoint.PowerShell is installed via a real Windows
+        PowerShell 5.1 process rather than the current PowerShell 7 session -
+        see Test-BaselineRequiredModule for why: PS7's Install-Module would put
+        it somewhere the -UseWindowsPowerShell compatibility session that
+        actually loads this module never looks.
     .PARAMETER Name
         Module name to install.
     .EXAMPLE
@@ -533,6 +552,13 @@ function Install-BaselineRequiredModule {
         [string]$Name
     )
     if ($PSCmdlet.ShouldProcess($Name, 'Install-Module -Scope CurrentUser')) {
+        if ($Name -eq 'Microsoft.Online.SharePoint.PowerShell') {
+            & powershell.exe -NoProfile -Command "Install-Module -Name '$Name' -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to install $Name via Windows PowerShell 5.1 (exit code $LASTEXITCODE)."
+            }
+            return
+        }
         Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
     }
 }

@@ -75,6 +75,17 @@ trade-off here.
   `SharePointOnlineControls.psm1` module that actually calls `Get-SPOTenant`
   and friends, which surfaced as `Get-SPOTenant is not recognized...` even
   right after a successful `Connect-SPOService`.
+  `-InstallMissingModules` also knows about this split: PowerShell 7's
+  `Install-Module -Scope CurrentUser` and Windows PowerShell 5.1's
+  `Install-Module -Scope CurrentUser` write to two different folders
+  (`Documents\PowerShell\Modules` vs. `Documents\WindowsPowerShell\Modules`
+  on Windows) — installing `Microsoft.Online.SharePoint.PowerShell` the
+  normal way from PS7 would leave it invisible to the Windows PowerShell 5.1
+  session that actually loads it, surfacing as `...was not loaded because no
+  valid module file was found in any module directory` even though
+  `-InstallMissingModules` reported success moments earlier. The toolkit
+  installs (and checks for) that one module via a real Windows PowerShell
+  5.1 process specifically to land it in the right folder.
 - One account with enough admin rights to touch every control below. Either
   **Global Administrator**, or this least-privileged combination:
   - **Exchange Administrator** — all `ExchangeOnline-*` controls and
