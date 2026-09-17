@@ -1,0 +1,1360 @@
+#Requires -Version 7.0
+<#
+    BaselineCore.psm1
+
+    Orchestration engine for the M365 Baseline Toolkit: config loading/validation,
+    connection management, the control catalog, compliance diffing, backup/restore,
+    and reporting. This module contains no tenant-specific business logic - that
+    lives in the per-workload control modules (EntraIdControls.psm1, etc). This
+    module never reads executable strings out of the config file; the config file
+    is data only.
+#>
+
+Set-StrictMode -Version Latest
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Schema version this build of the toolkit understands for the config file.
+$script:SupportedConfigSchemaVersion = '1.0'
+
+# Schema version this build of the toolkit writes/reads for snapshot (backup) files.
+$script:SnapshotSchemaVersion = '1.0'
+
+# Maps a control's connection requirement to the PowerShell module that provides it.
+$script:WorkloadModuleMap = [ordered]@{
+    Graph            = 'Microsoft.Graph'
+    ExchangeOnline   = 'ExchangeOnlineManagement'
+    Teams            = 'MicrosoftTeams'
+    SharePointOnline = 'Microsoft.Online.SharePoint.PowerShell'
+}
+
+# Narrowest Graph delegated scopes that cover the EntraID controls in this toolkit.
+$script:GraphScopes = @(
+    'Policy.ReadWrite.Authorization'
+    'Policy.ReadWrite.AuthenticationMethod'
+    'Directory.Read.All'
+    'RoleManagement.Read.Directory'
+)
+
+# A control's "workload" label in the config is the audit grouping used in reports.
+# Its *connection* requirement (which service must be connected before Get-/Set- runs)
+# is usually the same, but EntraID-UnifiedAuditLog is a documented exception: the
+# cmdlet Microsoft ships for unified audit log ingestion is an Exchange Online
+# cmdlet even though the setting is conceptually an EntraID/tenant-wide control.
+# This map is orchestration metadata (how to connect), not desired-state data, so
+# it stays in code rather than in the JSON config.
+$script:ControlConnectionOverrides = @{
+    'EntraID-UnifiedAuditLog' = 'ExchangeOnline'
+}
+
+$script:WorkloadToConnectionDefault = @{
+    EntraID          = 'Graph'
+    ExchangeOnline   = 'ExchangeOnline'
+    Teams            = 'Teams'
+    SharePointOnline = 'SharePointOnline'
+}
+
+# Recognized Set- function result statuses.
+$script:ResultStatus = @{
+    Success              = 'Success'
+    Failed               = 'Failed'
+    SkippedAlreadyOk     = 'Skipped-AlreadyCompliant'
+    SkippedManual        = 'Skipped-Manual'
+    SkippedDisabled      = 'Skipped-Disabled'
+}
+
+# ---------------------------------------------------------------------------
+# Config loading and validation
+# ---------------------------------------------------------------------------
+
+function Import-BaselineConfig {
+    <#
+    .SYNOPSIS
+        Loads and validates the baseline desired-state config file.
+    .DESCRIPTION
+        Reads the JSON config file, validates it against the JSON schema (structural
+        validation) and against a set of hand-rolled semantic rules (clear,
+        control-specific error messages). Throws a single aggregated error listing
+        every problem found rather than stopping at the first one. Never evaluates
+        any string in the config file as code - every field is treated as inert data.
+    .PARAMETER Path
+        Path to the baseline.config.json file.
+    .PARAMETER SchemaPath
+        Path to the baseline.config.schema.json file.
+    .EXAMPLE
+        Import-BaselineConfig -Path ./config/baseline.config.json -SchemaPath ./config/baseline.config.schema.json
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$SchemaPath
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Baseline config file not found: $Path"
+    }
+    if (-not (Test-Path -LiteralPath $SchemaPath)) {
+        throw "Baseline config schema file not found: $SchemaPath"
+    }
+
+    $rawJson = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+
+    try {
+        $null = $rawJson | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Baseline config file '$Path' is not valid JSON: $($_.Exception.Message)"
+    }
+
+    $schemaJson = Get-Content -LiteralPath $SchemaPath -Raw -ErrorAction Stop
+    $schemaErrors = @()
+    try {
+        $null = Test-Json -Json $rawJson -Schema $schemaJson -ErrorAction Stop
+    }
+    catch {
+        $schemaErrors += $_.Exception.Message
+    }
+
+    $config = $rawJson | ConvertFrom-Json -Depth 25
+
+    if ($config.schemaVersion -ne $script:SupportedConfigSchemaVersion) {
+        $schemaErrors += "Config schemaVersion '$($config.schemaVersion)' is not supported by this build of the toolkit (expected '$script:SupportedConfigSchemaVersion')."
+    }
+
+    $semanticErrors = Test-BaselineConfigSemantics -Config $config
+
+    $allErrors = @($schemaErrors) + @($semanticErrors)
+    if ($allErrors.Count -gt 0) {
+        $message = "Baseline config validation failed with $($allErrors.Count) issue(s):`n" + (($allErrors | ForEach-Object { " - $_" }) -join "`n")
+        throw $message
+    }
+
+    return $config
+}
+
+function Test-BaselineConfigSemantics {
+    <#
+    .SYNOPSIS
+        Hand-rolled semantic validation of a parsed baseline config, beyond what
+        the JSON schema alone can express.
+    .DESCRIPTION
+        Returns an array of human-readable error strings (empty array = valid).
+        Checks: duplicate ids, automatable=false controls missing manualInstructions,
+        Range compliance mode requiring a {min,max} desiredValue, and desiredValue
+        typing sanity for the object-shaped controls in this toolkit's inventory.
+    .PARAMETER Config
+        The parsed config object (from ConvertFrom-Json).
+    .EXAMPLE
+        Test-BaselineConfigSemantics -Config $config
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Config
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+
+    if (-not $Config.PSObject.Properties['controls'] -or -not $Config.controls) {
+        $errors.Add("Config has no 'controls' array.")
+        return ,$errors.ToArray()
+    }
+
+    $seenIds = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($control in $Config.controls) {
+        $id = [string]$control.id
+        if ([string]::IsNullOrWhiteSpace($id)) {
+            $errors.Add("A control entry is missing an 'id'.")
+            continue
+        }
+        if (-not $seenIds.Add($id)) {
+            $errors.Add("Control '$id': duplicate id - each control id must be unique.")
+        }
+
+        if ($control.automatable -eq $false) {
+            $manualInstructions = if ($control.PSObject.Properties['manualInstructions']) { [string]$control.manualInstructions } else { '' }
+            if ([string]::IsNullOrWhiteSpace($manualInstructions)) {
+                $errors.Add("Control '$id': automatable is false but 'manualInstructions' is missing/empty; the report cannot tell an admin where to change this by hand.")
+            }
+        }
+
+        $complianceMode = if ($control.PSObject.Properties['complianceMode']) { [string]$control.complianceMode } else { 'Equality' }
+        if ($complianceMode -eq 'Range') {
+            $desired = $control.desiredValue
+            $hasMin = $desired -and $desired.PSObject.Properties['min']
+            $hasMax = $desired -and $desired.PSObject.Properties['max']
+            if (-not ($hasMin -and $hasMax)) {
+                $errors.Add("Control '$id': complianceMode is 'Range' but desiredValue is not a {min,max} object.")
+            }
+            elseif ([double]$desired.min -gt [double]$desired.max) {
+                $errors.Add("Control '$id': desiredValue.min ($($desired.min)) is greater than desiredValue.max ($($desired.max)).")
+            }
+        }
+
+        if ($control.PSObject.Properties['requiresPopulatedFields']) {
+            foreach ($field in $control.requiresPopulatedFields) {
+                if (-not ($control.desiredValue -and $control.desiredValue.PSObject.Properties[$field])) {
+                    $errors.Add("Control '$id': requiresPopulatedFields references '$field', but desiredValue has no such property.")
+                }
+            }
+        }
+    }
+
+    return ,$errors.ToArray()
+}
+
+function Get-BaselineControlConnection {
+    <#
+    .SYNOPSIS
+        Resolves which backend connection a control needs (Graph, ExchangeOnline,
+        Teams, or SharePointOnline), which may differ from its report 'workload'.
+    .PARAMETER Control
+        A single control entry from the parsed config.
+    .EXAMPLE
+        Get-BaselineControlConnection -Control $control
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Control
+    )
+
+    if ($script:ControlConnectionOverrides.ContainsKey($Control.id)) {
+        return $script:ControlConnectionOverrides[$Control.id]
+    }
+    if ($script:WorkloadToConnectionDefault.ContainsKey($Control.workload)) {
+        return $script:WorkloadToConnectionDefault[$Control.workload]
+    }
+    throw "Control '$($Control.id)': unable to resolve a required connection for workload '$($Control.workload)'."
+}
+
+# ---------------------------------------------------------------------------
+# Control catalog
+# ---------------------------------------------------------------------------
+
+function Get-BaselineControlCatalog {
+    <#
+    .SYNOPSIS
+        Builds the control catalog by matching every enabled config entry to its
+        Get-<Id>State / Set-<Id>State function pair.
+    .DESCRIPTION
+        The orchestrator never invents behavior for a control it doesn't recognize:
+        if a config entry's id has no matching Get-/Set- function pair loaded into
+        the session, or a control module exposes a Get-/Set- pair with no matching
+        config entry, that is a validation error surfaced before any connection is
+        made or any state is read/changed.
+    .PARAMETER Config
+        The parsed, already-validated config object.
+    .PARAMETER AvailableFunctions
+        Optional override of the function name list to match against (for testing).
+        Defaults to every Get-*State/Set-*State command currently loaded.
+    .EXAMPLE
+        Get-BaselineControlCatalog -Config $config
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject[]])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Config,
+
+        [Parameter()]
+        [string[]]$AvailableFunctions
+    )
+
+    if (-not $AvailableFunctions) {
+        $AvailableFunctions = (Get-Command -CommandType Function | Where-Object { $_.Name -match '^(Get|Set)-.+State$' }).Name
+    }
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $catalog = [System.Collections.Generic.List[pscustomobject]]::new()
+    $matchedFunctionNames = [System.Collections.Generic.HashSet[string]]::new()
+
+    $enabledControls = @($Config.controls | Where-Object { $_.enabled })
+
+    foreach ($control in $enabledControls) {
+        $getName = "Get-$($control.id)State"
+        $setName = "Set-$($control.id)State"
+
+        $hasGet = $AvailableFunctions -contains $getName
+        $hasSet = $AvailableFunctions -contains $setName
+
+        if (-not $hasGet) { $errors.Add("Control '$($control.id)' is enabled in config but no '$getName' function is implemented in the control catalog.") }
+        if (-not $hasSet) { $errors.Add("Control '$($control.id)' is enabled in config but no '$setName' function is implemented in the control catalog.") }
+
+        if ($hasGet -and $hasSet) {
+            [void]$matchedFunctionNames.Add($getName)
+            [void]$matchedFunctionNames.Add($setName)
+            $catalog.Add([pscustomobject]@{
+                Id           = $control.id
+                Workload     = $control.workload
+                Connection   = Get-BaselineControlConnection -Control $control
+                Automatable  = [bool]$control.automatable
+                DesiredValue = $control.desiredValue
+                Description  = $control.description
+                ComplianceMode = if ($control.PSObject.Properties['complianceMode']) { [string]$control.complianceMode } else { 'Equality' }
+                ManualInstructions = if ($control.PSObject.Properties['manualInstructions']) { [string]$control.manualInstructions } else { '' }
+                RequiresPopulatedFields = @(if ($control.PSObject.Properties['requiresPopulatedFields']) { $control.requiresPopulatedFields } else { @() })
+                GetCommand   = $getName
+                SetCommand   = $setName
+            })
+        }
+    }
+
+    # Orphaned catalog functions: implemented but not referenced by any enabled config entry.
+    $configuredIds = [System.Collections.Generic.HashSet[string]]::new([string[]]$enabledControls.id)
+    foreach ($fn in $AvailableFunctions) {
+        if ($fn -match '^Get-(.+)State$') {
+            $candidateId = $Matches[1]
+            if (-not $configuredIds.Contains($candidateId) -and ($AvailableFunctions -contains "Set-${candidateId}State")) {
+                # Only flag it if the id isn't present at all in config (vs. present-but-disabled, which is a legitimate opt-out).
+                $presentButDisabled = @($Config.controls | Where-Object { $_.id -eq $candidateId }).Count -gt 0
+                if (-not $presentButDisabled) {
+                    $errors.Add("Control catalog implements '$candidateId' (Get-${candidateId}State/Set-${candidateId}State) but config/baseline.config.json has no entry for it.")
+                }
+            }
+        }
+    }
+
+    if ($errors.Count -gt 0) {
+        $message = "Control catalog validation failed with $($errors.Count) issue(s):`n" + (($errors | ForEach-Object { " - $_" }) -join "`n")
+        throw $message
+    }
+
+    return ,$catalog.ToArray()
+}
+
+# ---------------------------------------------------------------------------
+# Value comparison
+# ---------------------------------------------------------------------------
+
+function Compare-BaselineValueDeep {
+    <#
+    .SYNOPSIS
+        Deep, order-insensitive-for-objects structural equality check used to
+        compute compliance between a current value and a desired value.
+    .PARAMETER Left
+        First value (typically the live/current value).
+    .PARAMETER Right
+        Second value (typically the desired value from config).
+    .EXAMPLE
+        Compare-BaselineValueDeep -Left $current -Right $desired
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object]$Left,
+
+        [Parameter()]
+        [AllowNull()]
+        [object]$Right
+    )
+
+    if ($null -eq $Left -and $null -eq $Right) { return $true }
+    if ($null -eq $Left -or $null -eq $Right) { return $false }
+
+    $leftIsCollection = ($Left -is [System.Collections.IEnumerable]) -and (-not ($Left -is [string]))
+    $rightIsCollection = ($Right -is [System.Collections.IEnumerable]) -and (-not ($Right -is [string]))
+
+    if ($leftIsCollection -and $rightIsCollection) {
+        $leftArr = @($Left)
+        $rightArr = @($Right)
+        if ($leftArr.Count -ne $rightArr.Count) { return $false }
+        for ($i = 0; $i -lt $leftArr.Count; $i++) {
+            if (-not (Compare-BaselineValueDeep -Left $leftArr[$i] -Right $rightArr[$i])) { return $false }
+        }
+        return $true
+    }
+    if ($leftIsCollection -ne $rightIsCollection) { return $false }
+
+    $leftIsObject = ($Left -is [System.Management.Automation.PSCustomObject]) -or ($Left -is [System.Collections.IDictionary])
+    $rightIsObject = ($Right -is [System.Management.Automation.PSCustomObject]) -or ($Right -is [System.Collections.IDictionary])
+
+    if ($leftIsObject -and $rightIsObject) {
+        $leftProps = Get-BaselinePropertyMap -Value $Left
+        $rightProps = Get-BaselinePropertyMap -Value $Right
+        $leftKeys = [string[]]$leftProps.Keys
+        $rightKeys = [string[]]$rightProps.Keys
+        if (Compare-Object -ReferenceObject $leftKeys -DifferenceObject $rightKeys -CaseSensitive:$false) { return $false }
+        foreach ($key in $leftKeys) {
+            $matchKey = $rightProps.Keys | Where-Object { $_ -ieq $key } | Select-Object -First 1
+            if (-not (Compare-BaselineValueDeep -Left $leftProps[$key] -Right $rightProps[$matchKey])) { return $false }
+        }
+        return $true
+    }
+    if ($leftIsObject -ne $rightIsObject) { return $false }
+
+    # Scalars: compare loosely on numerics (int vs double from JSON), strictly otherwise.
+    if (($Left -is [ValueType] -or $Left -is [string]) -and ($Right -is [ValueType] -or $Right -is [string])) {
+        if ($Left -is [bool] -or $Right -is [bool]) {
+            return ([bool]$Left) -eq ([bool]$Right)
+        }
+        if (($Left -is [string]) -or ($Right -is [string])) {
+            return [string]$Left -eq [string]$Right
+        }
+        try {
+            return ([double]$Left) -eq ([double]$Right)
+        }
+        catch {
+            return $Left -eq $Right
+        }
+    }
+
+    return $Left -eq $Right
+}
+
+function Get-BaselinePropertyMap {
+    <#
+    .SYNOPSIS
+        Normalizes a PSCustomObject or hashtable/dictionary into an ordered
+        hashtable of property name/value pairs for comparison and templating.
+    .PARAMETER Value
+        The object to normalize.
+    .EXAMPLE
+        Get-BaselinePropertyMap -Value $desiredValue
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value
+    )
+
+    $map = [ordered]@{}
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in $Value.Keys) { $map[[string]$key] = $Value[$key] }
+    }
+    else {
+        foreach ($p in $Value.PSObject.Properties) { $map[$p.Name] = $p.Value }
+    }
+    return $map
+}
+
+function Test-BaselineCompliance {
+    <#
+    .SYNOPSIS
+        Computes whether a current value is compliant with a desired value under
+        a given compliance mode.
+    .PARAMETER CurrentValue
+        The live value read from the tenant.
+    .PARAMETER DesiredValue
+        The value from config.
+    .PARAMETER ComplianceMode
+        'Equality' (default) does a deep structural comparison. 'Range' expects
+        DesiredValue to be a {min,max} object and CurrentValue to be numeric.
+    .EXAMPLE
+        Test-BaselineCompliance -CurrentValue 3 -DesiredValue @{min=2;max=4} -ComplianceMode Range
+    #>
+    [CmdletBinding()]
+    [OutputType([Nullable[bool]])]
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object]$CurrentValue,
+
+        [Parameter()]
+        [AllowNull()]
+        [object]$DesiredValue,
+
+        [Parameter()]
+        [ValidateSet('Equality', 'Range')]
+        [string]$ComplianceMode = 'Equality'
+    )
+
+    if ($null -eq $CurrentValue) { return $null }
+
+    if ($ComplianceMode -eq 'Range') {
+        $props = Get-BaselinePropertyMap -Value $DesiredValue
+        return ([double]$CurrentValue -ge [double]$props['min']) -and ([double]$CurrentValue -le [double]$props['max'])
+    }
+
+    return Compare-BaselineValueDeep -Left $CurrentValue -Right $DesiredValue
+}
+
+# ---------------------------------------------------------------------------
+# Module / connection management
+# ---------------------------------------------------------------------------
+
+function Test-BaselineRequiredModule {
+    <#
+    .SYNOPSIS
+        Checks whether a required PowerShell module is installed.
+    .PARAMETER Name
+        Module name.
+    .EXAMPLE
+        Test-BaselineRequiredModule -Name ExchangeOnlineManagement
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+    return [bool](Get-Module -ListAvailable -Name $Name | Select-Object -First 1)
+}
+
+function Install-BaselineRequiredModule {
+    <#
+    .SYNOPSIS
+        Installs a required module from PSGallery for the current user.
+    .PARAMETER Name
+        Module name to install.
+    .EXAMPLE
+        Install-BaselineRequiredModule -Name MicrosoftTeams
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+    if ($PSCmdlet.ShouldProcess($Name, 'Install-Module -Scope CurrentUser')) {
+        Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+    }
+}
+
+function Assert-BaselineRequiredModules {
+    <#
+    .SYNOPSIS
+        Ensures every module needed by the given connections is installed,
+        optionally auto-installing missing ones.
+    .PARAMETER Connections
+        Distinct connection names ('Graph','ExchangeOnline','Teams','SharePointOnline').
+    .PARAMETER InstallMissingModules
+        If set, missing modules are installed from PSGallery for CurrentUser.
+        Otherwise a missing module is a terminating, actionable error.
+    .EXAMPLE
+        Assert-BaselineRequiredModules -Connections 'Graph','ExchangeOnline' -InstallMissingModules
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Connections,
+
+        [Parameter()]
+        [switch]$InstallMissingModules
+    )
+
+    foreach ($conn in ($Connections | Select-Object -Unique)) {
+        $moduleName = $script:WorkloadModuleMap[$conn]
+        if (-not $moduleName) { throw "Unknown connection type '$conn'." }
+
+        if (-not (Test-BaselineRequiredModule -Name $moduleName)) {
+            if ($InstallMissingModules) {
+                Write-Verbose "Installing missing module '$moduleName' (Scope CurrentUser)..."
+                Install-BaselineRequiredModule -Name $moduleName
+            }
+            else {
+                throw "Required module '$moduleName' (for $conn) is not installed. Install it with: Install-Module -Name $moduleName -Scope CurrentUser, or re-run with -InstallMissingModules."
+            }
+        }
+    }
+}
+
+function Connect-BaselineWorkload {
+    <#
+    .SYNOPSIS
+        Establishes a connection for a single backend service, once per run.
+    .PARAMETER Connection
+        'Graph', 'ExchangeOnline', 'Teams', or 'SharePointOnline'.
+    .PARAMETER SharePointAdminUrl
+        Required only when Connection is 'SharePointOnline' (e.g. https://contoso-admin.sharepoint.com).
+    .EXAMPLE
+        Connect-BaselineWorkload -Connection Graph
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Graph', 'ExchangeOnline', 'Teams', 'SharePointOnline')]
+        [string]$Connection,
+
+        [Parameter()]
+        [string]$SharePointAdminUrl
+    )
+
+    try {
+        switch ($Connection) {
+            'Graph' {
+                Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+                Connect-MgGraph -Scopes $script:GraphScopes -NoWelcome -ErrorAction Stop
+            }
+            'ExchangeOnline' {
+                Import-Module ExchangeOnlineManagement -ErrorAction Stop
+                Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+            }
+            'Teams' {
+                Import-Module MicrosoftTeams -ErrorAction Stop
+                Connect-MicrosoftTeams -ErrorAction Stop | Out-Null
+            }
+            'SharePointOnline' {
+                if ([string]::IsNullOrWhiteSpace($SharePointAdminUrl)) {
+                    throw "SharePointOnline connection requires -SharePointAdminUrl (e.g. https://contoso-admin.sharepoint.com)."
+                }
+                Import-Module Microsoft.Online.SharePoint.PowerShell -ErrorAction Stop
+                Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
+            }
+        }
+    }
+    catch {
+        throw "Failed to connect to $Connection`: $($_.Exception.Message). Verify the account has the admin role required for this workload (see README.md)."
+    }
+}
+
+function Disconnect-BaselineWorkload {
+    <#
+    .SYNOPSIS
+        Best-effort disconnect for a single backend service. Never throws.
+    .PARAMETER Connection
+        'Graph', 'ExchangeOnline', 'Teams', or 'SharePointOnline'.
+    .EXAMPLE
+        Disconnect-BaselineWorkload -Connection Graph
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Graph', 'ExchangeOnline', 'Teams', 'SharePointOnline')]
+        [string]$Connection
+    )
+    try {
+        switch ($Connection) {
+            'Graph' { Disconnect-MgGraph -ErrorAction Stop | Out-Null }
+            'ExchangeOnline' { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction Stop }
+            'Teams' { Disconnect-MicrosoftTeams -ErrorAction Stop }
+            'SharePointOnline' { Disconnect-SPOService -ErrorAction Stop }
+        }
+    }
+    catch {
+        Write-Verbose "Non-fatal: disconnect from $Connection reported: $($_.Exception.Message)"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Audit engine
+# ---------------------------------------------------------------------------
+
+function Invoke-BaselineControlAudit {
+    <#
+    .SYNOPSIS
+        Reads current state for every control in the catalog and computes compliance.
+    .DESCRIPTION
+        Calls each control's Get-<Id>State function. A control that throws while
+        being read is recorded with Compliant = $null and its error message,
+        contributing to the audit's error count, which is distinct from a normal
+        non-compliant finding.
+    .PARAMETER Catalog
+        Catalog entries from Get-BaselineControlCatalog.
+    .EXAMPLE
+        Invoke-BaselineControlAudit -Catalog $catalog
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject[]])]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject[]]$Catalog
+    )
+
+    $results = [System.Collections.Generic.List[pscustomobject]]::new()
+
+    foreach ($entry in $Catalog) {
+        $currentValue = $null
+        $errorMessage = $null
+        try {
+            $stateResult = & $entry.GetCommand
+            $currentValue = $stateResult.Value
+        }
+        catch {
+            $errorMessage = $_.Exception.Message
+        }
+
+        $compliant = if ($errorMessage) { $null } else { Test-BaselineCompliance -CurrentValue $currentValue -DesiredValue $entry.DesiredValue -ComplianceMode $entry.ComplianceMode }
+
+        $results.Add([pscustomobject]@{
+            Id                 = $entry.Id
+            Workload           = $entry.Workload
+            Description        = $entry.Description
+            Automatable        = $entry.Automatable
+            CurrentValue       = $currentValue
+            DesiredValue       = $entry.DesiredValue
+            Compliant          = $compliant
+            ManualInstructions = $entry.ManualInstructions
+            Error              = $errorMessage
+        })
+    }
+
+    return ,$results.ToArray()
+}
+
+# ---------------------------------------------------------------------------
+# Apply / Restore engine
+# ---------------------------------------------------------------------------
+
+function Test-BaselineApplyReadiness {
+    <#
+    .SYNOPSIS
+        Pre-flight check for Apply mode: catches controls whose desiredValue is
+        missing tenant-specific required fields (e.g. empty domain lists) before
+        any connection is made or any change is attempted.
+    .PARAMETER Catalog
+        Catalog entries from Get-BaselineControlCatalog.
+    .EXAMPLE
+        Test-BaselineApplyReadiness -Catalog $catalog
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject[]]$Catalog
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in $Catalog) {
+        if (-not $entry.Automatable) { continue }
+        foreach ($field in $entry.RequiresPopulatedFields) {
+            $value = $null
+            if ($entry.DesiredValue -and $entry.DesiredValue.PSObject.Properties[$field]) {
+                $value = $entry.DesiredValue.$field
+            }
+            $isEmpty = ($null -eq $value) -or (($value -is [System.Collections.IEnumerable]) -and (-not ($value -is [string])) -and (@($value).Count -eq 0)) -or ($value -eq '')
+            if ($isEmpty) {
+                $errors.Add("Control '$($entry.Id)': desiredValue.$field is empty. This control requires tenant-specific values before it can be applied - edit config/baseline.config.json and populate it, or disable the control for this run.")
+            }
+        }
+    }
+    return ,$errors.ToArray()
+}
+
+function Invoke-BaselineControlApply {
+    <#
+    .SYNOPSIS
+        Applies desired state for every enabled, automatable, non-compliant control.
+    .DESCRIPTION
+        Already-compliant controls are skipped and logged as Skipped-AlreadyCompliant
+        without calling Set-. Non-automatable controls are skipped and logged as
+        Skipped-Manual using the message their Set- function (or config
+        manualInstructions) provides. Every attempt is appended to the change log.
+        Honors ShouldProcess: when WhatIfMode is set, no Set- function is called.
+    .PARAMETER Catalog
+        Catalog entries from Get-BaselineControlCatalog.
+    .PARAMETER AuditResults
+        Pre-change audit results (from Invoke-BaselineControlAudit) used to decide
+        what needs changing and to skip controls that errored on read.
+    .PARAMETER ChangeLogPath
+        Path to the JSON Lines change log file to append to.
+    .PARAMETER WhatIfMode
+        When set, simulates the run (calls ShouldProcess but never invokes Set-).
+    .PARAMETER ShouldProcessTarget
+        The cmdlet/script whose ShouldProcess gate to honor (pass $PSCmdlet from the caller).
+    .PARAMETER AcknowledgeRisk
+        Forwarded to Set- functions that accept an -AcknowledgeRisk switch, for
+        controls with a deliberately severe empty-list interpretation.
+    .EXAMPLE
+        Invoke-BaselineControlApply -Catalog $catalog -AuditResults $audit -ChangeLogPath $log -ShouldProcessTarget $PSCmdlet
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject[]])]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject[]]$Catalog,
+
+        [Parameter(Mandatory)]
+        [pscustomobject[]]$AuditResults,
+
+        [Parameter(Mandatory)]
+        [string]$ChangeLogPath,
+
+        [Parameter()]
+        [switch]$WhatIfMode,
+
+        [Parameter()]
+        [object]$ShouldProcessTarget,
+
+        [Parameter()]
+        [switch]$AcknowledgeRisk,
+
+        [Parameter()]
+        [switch]$StopOnError
+    )
+
+    $results = [System.Collections.Generic.List[pscustomobject]]::new()
+    $auditById = @{}
+    foreach ($a in $AuditResults) { $auditById[$a.Id] = $a }
+
+    foreach ($entry in $Catalog) {
+        $audit = $auditById[$entry.Id]
+        if (-not $audit) { continue }
+
+        $logRecord = [ordered]@{
+            timestampUtc  = (Get-Date).ToUniversalTime().ToString('o')
+            id            = $entry.Id
+            workload      = $entry.Workload
+            previousValue = $audit.CurrentValue
+            attemptedValue = $entry.DesiredValue
+            result        = $null
+            errorMessage  = $null
+        }
+
+        if ($audit.Error) {
+            $logRecord.result = $script:ResultStatus.Failed
+            $logRecord.errorMessage = "Skipped: pre-change audit could not read current state ($($audit.Error))."
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = $script:ResultStatus.Failed; PreviousValue = $audit.CurrentValue; AppliedValue = $null; Message = $logRecord.errorMessage })
+            if ($StopOnError) { throw "Stopping (StopOnError): $($entry.Id) - $($logRecord.errorMessage)" }
+            continue
+        }
+
+        if (-not $entry.Automatable) {
+            $message = if ($entry.ManualInstructions) { $entry.ManualInstructions } else { 'No automated remediation is implemented for this control.' }
+            $logRecord.result = $script:ResultStatus.SkippedManual
+            $logRecord.errorMessage = $message
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = $script:ResultStatus.SkippedManual; PreviousValue = $audit.CurrentValue; AppliedValue = $null; Message = $message })
+            continue
+        }
+
+        if ($audit.Compliant -eq $true) {
+            $logRecord.result = $script:ResultStatus.SkippedAlreadyOk
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = $script:ResultStatus.SkippedAlreadyOk; PreviousValue = $audit.CurrentValue; AppliedValue = $audit.CurrentValue; Message = 'Already compliant, no action.' })
+            continue
+        }
+
+        $target = "$($entry.Id) ($($entry.Workload))"
+        $action = "Set desired state (current: $($audit.CurrentValue | ConvertTo-Json -Compress -Depth 10) -> desired: $($entry.DesiredValue | ConvertTo-Json -Compress -Depth 10))"
+
+        $shouldProceed = $true
+        if ($ShouldProcessTarget -and ($ShouldProcessTarget | Get-Member -Name ShouldProcess -ErrorAction SilentlyContinue)) {
+            $shouldProceed = $ShouldProcessTarget.ShouldProcess($target, $action)
+        }
+
+        if (-not $shouldProceed -or $WhatIfMode) {
+            $logRecord.result = 'Skipped-WhatIf'
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = 'Skipped-WhatIf'; PreviousValue = $audit.CurrentValue; AppliedValue = $null; Message = 'Skipped due to -WhatIf.' })
+            continue
+        }
+
+        try {
+            $setParams = @{ DesiredValue = $entry.DesiredValue; CurrentValue = $audit.CurrentValue }
+            $setCmd = Get-Command $entry.SetCommand -ErrorAction Stop
+            if ($setCmd.Parameters.ContainsKey('AcknowledgeRisk')) {
+                $setParams['AcknowledgeRisk'] = [bool]$AcknowledgeRisk
+            }
+            $setResult = & $entry.SetCommand @setParams
+
+            $logRecord.result = $setResult.Status
+            $logRecord.errorMessage = $setResult.Message
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add($setResult)
+        }
+        catch {
+            $logRecord.result = $script:ResultStatus.Failed
+            $logRecord.errorMessage = $_.Exception.Message
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = $script:ResultStatus.Failed; PreviousValue = $audit.CurrentValue; AppliedValue = $null; Message = $_.Exception.Message })
+            if ($StopOnError) { throw "Stopping (StopOnError): $($entry.Id) - $($_.Exception.Message)" }
+        }
+    }
+
+    return ,$results.ToArray()
+}
+
+function Invoke-BaselineControlRestore {
+    <#
+    .SYNOPSIS
+        Replays a snapshot file's recorded current values as the new desired state.
+    .DESCRIPTION
+        For each control in the snapshot, calls the same Set-<Id>State function used
+        by Apply, but passes the snapshot's currentValue (captured at snapshot time)
+        as the value to converge to - never the live config's desiredValue.
+    .PARAMETER Catalog
+        Catalog entries from Get-BaselineControlCatalog (built from the *current* config,
+        used only to resolve Set- function names / automatable flags).
+    .PARAMETER SnapshotControls
+        The 'controls' array from a loaded snapshot file.
+    .PARAMETER ChangeLogPath
+        Path to the JSON Lines change log file to append to.
+    .PARAMETER WhatIfMode
+        When set, simulates the run.
+    .PARAMETER ShouldProcessTarget
+        Pass $PSCmdlet from the caller to honor -WhatIf/-Confirm.
+    .PARAMETER StopOnError
+        Abort the whole restore on the first failure instead of continuing.
+    .EXAMPLE
+        Invoke-BaselineControlRestore -Catalog $catalog -SnapshotControls $snapshot.controls -ChangeLogPath $log -ShouldProcessTarget $PSCmdlet
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject[]])]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject[]]$Catalog,
+
+        [Parameter(Mandatory)]
+        [object[]]$SnapshotControls,
+
+        [Parameter(Mandatory)]
+        [string]$ChangeLogPath,
+
+        [Parameter()]
+        [switch]$WhatIfMode,
+
+        [Parameter()]
+        [object]$ShouldProcessTarget,
+
+        [Parameter()]
+        [switch]$StopOnError
+    )
+
+    $results = [System.Collections.Generic.List[pscustomobject]]::new()
+    $catalogById = @{}
+    foreach ($c in $Catalog) { $catalogById[$c.Id] = $c }
+
+    foreach ($snap in $SnapshotControls) {
+        $entry = $catalogById[$snap.id]
+
+        $logRecord = [ordered]@{
+            timestampUtc   = (Get-Date).ToUniversalTime().ToString('o')
+            id             = $snap.id
+            workload       = $snap.workload
+            previousValue  = $null
+            attemptedValue = $snap.currentValue
+            result         = $null
+            errorMessage   = $null
+        }
+
+        if (-not $entry) {
+            $logRecord.result = $script:ResultStatus.Failed
+            $logRecord.errorMessage = "No control named '$($snap.id)' exists in the currently loaded catalog; cannot restore it."
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $snap.id; Status = $script:ResultStatus.Failed; PreviousValue = $null; AppliedValue = $null; Message = $logRecord.errorMessage })
+            if ($StopOnError) { throw "Stopping (StopOnError): $($snap.id) - $($logRecord.errorMessage)" }
+            continue
+        }
+
+        if (-not $entry.Automatable) {
+            $message = if ($entry.ManualInstructions) { $entry.ManualInstructions } else { 'No automated remediation is implemented for this control.' }
+            $logRecord.result = $script:ResultStatus.SkippedManual
+            $logRecord.errorMessage = $message
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = $script:ResultStatus.SkippedManual; PreviousValue = $null; AppliedValue = $null; Message = $message })
+            continue
+        }
+
+        $target = "$($entry.Id) ($($entry.Workload))"
+        $action = "Restore recorded value from snapshot: $($snap.currentValue | ConvertTo-Json -Compress -Depth 10)"
+        $shouldProceed = $true
+        if ($ShouldProcessTarget -and ($ShouldProcessTarget | Get-Member -Name ShouldProcess -ErrorAction SilentlyContinue)) {
+            $shouldProceed = $ShouldProcessTarget.ShouldProcess($target, $action)
+        }
+
+        if (-not $shouldProceed -or $WhatIfMode) {
+            $logRecord.result = 'Skipped-WhatIf'
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = 'Skipped-WhatIf'; PreviousValue = $null; AppliedValue = $null; Message = 'Skipped due to -WhatIf.' })
+            continue
+        }
+
+        try {
+            $setResult = & $entry.SetCommand -DesiredValue $snap.currentValue -CurrentValue $null
+            $logRecord.result = $setResult.Status
+            $logRecord.errorMessage = $setResult.Message
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add($setResult)
+        }
+        catch {
+            $logRecord.result = $script:ResultStatus.Failed
+            $logRecord.errorMessage = $_.Exception.Message
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = $script:ResultStatus.Failed; PreviousValue = $null; AppliedValue = $null; Message = $_.Exception.Message })
+            if ($StopOnError) { throw "Stopping (StopOnError): $($entry.Id) - $($_.Exception.Message)" }
+        }
+    }
+
+    return ,$results.ToArray()
+}
+
+# ---------------------------------------------------------------------------
+# Backup / snapshot
+# ---------------------------------------------------------------------------
+
+function Save-BaselineSnapshot {
+    <#
+    .SYNOPSIS
+        Writes a timestamped JSON backup/snapshot file from audit results.
+    .PARAMETER AuditResults
+        Results from Invoke-BaselineControlAudit.
+    .PARAMETER Path
+        File path to write to.
+    .PARAMETER SourceMode
+        'Audit', 'Apply-PreChange', or 'Apply-PostChange' - recorded for context.
+    .PARAMETER ConfigSchemaVersion
+        The baseline config's schemaVersion, recorded for traceability.
+    .EXAMPLE
+        Save-BaselineSnapshot -AuditResults $audit -Path ./backups/backup_...json -SourceMode Audit -ConfigSchemaVersion '1.0'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject[]]$AuditResults,
+
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('Audit', 'Apply-PreChange', 'Apply-PostChange')]
+        [string]$SourceMode,
+
+        [Parameter(Mandatory)]
+        [string]$ConfigSchemaVersion
+    )
+
+    $snapshot = [pscustomobject]@{
+        snapshotSchemaVersion    = $script:SnapshotSchemaVersion
+        capturedAtUtc            = (Get-Date).ToUniversalTime().ToString('o')
+        mode                     = $SourceMode
+        baselineConfigSchemaVersion = $ConfigSchemaVersion
+        controls                 = @($AuditResults | ForEach-Object {
+            [pscustomobject]@{
+                id             = $_.Id
+                workload       = $_.Workload
+                description    = $_.Description
+                automatable    = $_.Automatable
+                currentValue   = $_.CurrentValue
+                desiredValue   = $_.DesiredValue
+                compliant      = $_.Compliant
+                error          = $_.Error
+            }
+        })
+    }
+
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false | Out-Null }
+
+    $snapshot | ConvertTo-Json -Depth 25 | Set-Content -LiteralPath $Path -Encoding utf8 -WhatIf:$false
+    return $Path
+}
+
+function Import-BaselineSnapshot {
+    <#
+    .SYNOPSIS
+        Loads and validates a snapshot/backup file for use by Restore mode.
+    .DESCRIPTION
+        Refuses to load a snapshot whose snapshotSchemaVersion doesn't match what
+        this build of the toolkit understands, rather than silently applying a
+        partially-understood file.
+    .PARAMETER Path
+        Path to the snapshot JSON file.
+    .EXAMPLE
+        Import-BaselineSnapshot -Path ./backups/backup_2026-09-17T14-30-00Z.json
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Backup/snapshot file not found: $Path"
+    }
+
+    try {
+        $snapshot = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -Depth 25 -ErrorAction Stop
+    }
+    catch {
+        throw "Backup/snapshot file '$Path' is not valid JSON: $($_.Exception.Message)"
+    }
+
+    if (-not $snapshot.PSObject.Properties['snapshotSchemaVersion']) {
+        throw "Backup/snapshot file '$Path' has no 'snapshotSchemaVersion' field; refusing to restore from a file this toolkit cannot confirm the shape of."
+    }
+    if ($snapshot.snapshotSchemaVersion -ne $script:SnapshotSchemaVersion) {
+        throw "Backup/snapshot file '$Path' has snapshotSchemaVersion '$($snapshot.snapshotSchemaVersion)', but this build of the toolkit expects '$script:SnapshotSchemaVersion'. Refusing to restore from a file whose schema may not be fully understood."
+    }
+    if (-not $snapshot.PSObject.Properties['controls'] -or -not $snapshot.controls) {
+        throw "Backup/snapshot file '$Path' has no 'controls' array; nothing to restore."
+    }
+
+    return $snapshot
+}
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+function Format-BaselineValueForDisplay {
+    <#
+    .SYNOPSIS
+        Renders any value (scalar, array, object, $null) as a short inline string
+        suitable for a Markdown table cell.
+    .PARAMETER Value
+        Value to render.
+    .EXAMPLE
+        Format-BaselineValueForDisplay -Value @{min=2;max=4}
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object]$Value
+    )
+    if ($null -eq $Value) { return '_(none)_' }
+    if ($Value -is [bool]) { return $Value.ToString() }
+    if ($Value -is [string]) { return $Value }
+    $json = $Value | ConvertTo-Json -Compress -Depth 10
+    # Escape pipe characters so the value doesn't break the Markdown table.
+    return ($json -replace '\|', '\|')
+}
+
+function Export-BaselineMarkdownReport {
+    <#
+    .SYNOPSIS
+        Writes a Markdown compliance report, one row per control.
+    .PARAMETER AuditResults
+        Results from Invoke-BaselineControlAudit.
+    .PARAMETER Path
+        File path to write to.
+    .PARAMETER Title
+        Report title/heading.
+    .PARAMETER ApplyResults
+        Optional. If supplied (Apply mode's post-change report), adds Action/Result columns.
+    .EXAMPLE
+        Export-BaselineMarkdownReport -AuditResults $audit -Path ./reports/pre-change_....md -Title 'Pre-Change Audit'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject[]]$AuditResults,
+
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Title,
+
+        [Parameter()]
+        [pscustomobject[]]$ApplyResults
+    )
+
+    $applyById = @{}
+    if ($ApplyResults) { foreach ($r in $ApplyResults) { $applyById[$r.Id] = $r } }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("# $Title")
+    $lines.Add('')
+    $lines.Add("Generated: $((Get-Date).ToUniversalTime().ToString('o'))")
+    $lines.Add('')
+    $errorCount = @($AuditResults | Where-Object { $_.Error }).Count
+    $nonCompliantCount = @($AuditResults | Where-Object { $_.Compliant -eq $false }).Count
+    $lines.Add("Controls evaluated: $($AuditResults.Count) | Non-compliant: $nonCompliantCount | Read errors: $errorCount")
+    $lines.Add('')
+
+    if ($ApplyResults) {
+        $lines.Add('| Id | Workload | Setting | Current | Desired | Compliant | Automatable | Action Taken | Result |')
+        $lines.Add('|---|---|---|---|---|---|---|---|---|')
+    }
+    else {
+        $lines.Add('| Id | Workload | Setting | Current | Desired | Compliant | Automatable | Notes |')
+        $lines.Add('|---|---|---|---|---|---|---|---|')
+    }
+
+    foreach ($r in $AuditResults) {
+        $compliantText = if ($null -eq $r.Compliant) { 'Unknown' } elseif ($r.Compliant) { 'Yes' } else { 'No' }
+        $current = if ($r.Error) { "_error: $($r.Error)_" } else { Format-BaselineValueForDisplay -Value $r.CurrentValue }
+        $desired = Format-BaselineValueForDisplay -Value $r.DesiredValue
+
+        if ($ApplyResults) {
+            $applyResult = $applyById[$r.Id]
+            $action = if ($applyResult) { $applyResult.Status } else { 'N/A' }
+            $resultMsg = if ($applyResult -and $applyResult.Message) { $applyResult.Message } else { '' }
+            $lines.Add("| $($r.Id) | $($r.Workload) | $($r.Description) | $current | $desired | $compliantText | $($r.Automatable) | $action | $resultMsg |")
+        }
+        else {
+            $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } else { '' }
+            $lines.Add("| $($r.Id) | $($r.Workload) | $($r.Description) | $current | $desired | $compliantText | $($r.Automatable) | $notes |")
+        }
+    }
+
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false | Out-Null }
+
+    ($lines -join "`n") | Set-Content -LiteralPath $Path -Encoding utf8 -WhatIf:$false
+    return $Path
+}
+
+function Export-BaselineHtmlReport {
+    <#
+    .SYNOPSIS
+        Writes a minimal, dependency-free HTML compliance report alongside the
+        Markdown report.
+    .PARAMETER AuditResults
+        Results from Invoke-BaselineControlAudit.
+    .PARAMETER Path
+        File path to write to.
+    .PARAMETER Title
+        Report title.
+    .PARAMETER ApplyResults
+        Optional post-change results (see Export-BaselineMarkdownReport).
+    .EXAMPLE
+        Export-BaselineHtmlReport -AuditResults $audit -Path ./reports/pre-change_....html -Title 'Pre-Change Audit'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject[]]$AuditResults,
+
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Title,
+
+        [Parameter()]
+        [pscustomobject[]]$ApplyResults
+    )
+
+    $applyById = @{}
+    if ($ApplyResults) { foreach ($r in $ApplyResults) { $applyById[$r.Id] = $r } }
+
+    $rowsHtml = foreach ($r in $AuditResults) {
+        $compliantText = if ($null -eq $r.Compliant) { 'Unknown' } elseif ($r.Compliant) { 'Yes' } else { 'No' }
+        $current = if ($r.Error) { "error: $($r.Error)" } else { Format-BaselineValueForDisplay -Value $r.CurrentValue }
+        $desired = Format-BaselineValueForDisplay -Value $r.DesiredValue
+        $extra = if ($ApplyResults) {
+            $applyResult = $applyById[$r.Id]
+            $action = if ($applyResult) { $applyResult.Status } else { 'N/A' }
+            $msg = if ($applyResult) { $applyResult.Message } else { '' }
+            "<td>$([System.Net.WebUtility]::HtmlEncode($action))</td><td>$([System.Net.WebUtility]::HtmlEncode([string]$msg))</td>"
+        }
+        else {
+            $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } else { '' }
+            "<td>$([System.Net.WebUtility]::HtmlEncode($notes))</td>"
+        }
+        "<tr><td>$([System.Net.WebUtility]::HtmlEncode($r.Id))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Workload))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Description))</td><td>$([System.Net.WebUtility]::HtmlEncode($current))</td><td>$([System.Net.WebUtility]::HtmlEncode($desired))</td><td>$compliantText</td><td>$($r.Automatable)</td>$extra</tr>"
+    }
+
+    $extraHeader = if ($ApplyResults) { '<th>Action Taken</th><th>Result</th>' } else { '<th>Notes</th>' }
+
+    $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>$([System.Net.WebUtility]::HtmlEncode($Title))</title>
+<style>
+body { font-family: -apple-system, Segoe UI, Arial, sans-serif; margin: 2rem; color: #1a1a1a; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; font-size: 0.9rem; vertical-align: top; }
+th { background: #f2f2f2; }
+tr:nth-child(even) { background: #fafafa; }
+</style>
+</head>
+<body>
+<h1>$([System.Net.WebUtility]::HtmlEncode($Title))</h1>
+<p>Generated: $((Get-Date).ToUniversalTime().ToString('o'))</p>
+<table>
+<thead><tr><th>Id</th><th>Workload</th><th>Setting</th><th>Current</th><th>Desired</th><th>Compliant</th><th>Automatable</th>$extraHeader</tr></thead>
+<tbody>
+$($rowsHtml -join "`n")
+</tbody>
+</table>
+</body>
+</html>
+"@
+
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false | Out-Null }
+
+    $html | Set-Content -LiteralPath $Path -Encoding utf8 -WhatIf:$false
+    return $Path
+}
+
+function Write-BaselineChangeLogEntry {
+    <#
+    .SYNOPSIS
+        Appends one JSON Lines record to the structured change log.
+    .PARAMETER Path
+        Change log file path.
+    .PARAMETER Entry
+        Ordered hashtable/object with the record fields.
+    .EXAMPLE
+        Write-BaselineChangeLogEntry -Path ./reports/changelog_....jsonl -Entry $record
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [object]$Entry
+    )
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false | Out-Null }
+
+    ($Entry | ConvertTo-Json -Compress -Depth 10) | Add-Content -LiteralPath $Path -Encoding utf8 -WhatIf:$false
+}
+
+function Get-BaselineTimestampedPath {
+    <#
+    .SYNOPSIS
+        Builds a collision-free, UTC-timestamped output file path and ensures its
+        parent directory exists.
+    .PARAMETER Directory
+        Target directory.
+    .PARAMETER Prefix
+        File name prefix (e.g. 'backup', 'pre-change').
+    .PARAMETER Extension
+        File extension without a leading dot (e.g. 'json', 'md').
+    .EXAMPLE
+        Get-BaselineTimestampedPath -Directory ./backups -Prefix backup -Extension json
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Directory,
+
+        [Parameter(Mandatory)]
+        [string]$Prefix,
+
+        [Parameter(Mandatory)]
+        [string]$Extension
+    )
+    if (-not (Test-Path -LiteralPath $Directory)) { New-Item -ItemType Directory -Path $Directory -Force -WhatIf:$false | Out-Null }
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH-mm-ssZ')
+    return (Join-Path $Directory "${Prefix}_${stamp}.${Extension}")
+}
+
+Export-ModuleMember -Function @(
+    'Import-BaselineConfig'
+    'Test-BaselineConfigSemantics'
+    'Get-BaselineControlConnection'
+    'Get-BaselineControlCatalog'
+    'Compare-BaselineValueDeep'
+    'Get-BaselinePropertyMap'
+    'Test-BaselineCompliance'
+    'Test-BaselineRequiredModule'
+    'Install-BaselineRequiredModule'
+    'Assert-BaselineRequiredModules'
+    'Connect-BaselineWorkload'
+    'Disconnect-BaselineWorkload'
+    'Invoke-BaselineControlAudit'
+    'Test-BaselineApplyReadiness'
+    'Invoke-BaselineControlApply'
+    'Invoke-BaselineControlRestore'
+    'Save-BaselineSnapshot'
+    'Import-BaselineSnapshot'
+    'Format-BaselineValueForDisplay'
+    'Export-BaselineMarkdownReport'
+    'Export-BaselineHtmlReport'
+    'Write-BaselineChangeLogEntry'
+    'Get-BaselineTimestampedPath'
+)

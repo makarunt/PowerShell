@@ -1,0 +1,252 @@
+{
+  "schemaVersion": "1.0",
+  "baselineSource": "CIS Microsoft 365 Foundations Benchmark v7.0.0 MVP baseline (P1/base license floor)",
+  "controls": [
+    {
+      "id": "EntraID-UnifiedAuditLog",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Unified audit log ingestion is enabled tenant-wide."
+    },
+    {
+      "id": "EntraID-GlobalAdminCount",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": false,
+      "desiredValue": { "min": 2, "max": 4 },
+      "description": "Number of active Global Administrator role members stays within a safe range (enough for resilience, few enough to limit blast radius).",
+      "complianceMode": "Range",
+      "manualInstructions": "Entra admin center > Identity > Roles & administrators > Global Administrator > review and adjust role assignments."
+    },
+    {
+      "id": "EntraID-GuestInviteRestriction",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "adminsAndGuestInviters",
+      "description": "Only admins and users explicitly granted the guest inviter role can invite guest users."
+    },
+    {
+      "id": "EntraID-GuestUserRoleRestriction",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "2af84b1e-32c8-42b7-82bc-daa82404023b",
+      "description": "Guest users are placed in the Restricted Guest User role, limiting what they can see in the directory."
+    },
+    {
+      "id": "EntraID-BlockUserConsentToApps",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "permissionGrantPoliciesAssigned": [] },
+      "description": "Non-admin users cannot consent to applications requesting access to organizational data."
+    },
+    {
+      "id": "EntraID-BlockSelfServiceAppCreation",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "allowedToCreateApps": false, "allowedToCreateTenants": false },
+      "description": "Regular users cannot register new app registrations or create new Entra ID tenants."
+    },
+    {
+      "id": "EntraID-RestrictAdminPortalAccess",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": false,
+      "desiredValue": true,
+      "description": "Access to Entra ID / M365 admin portals is restricted to admins only (non-admins get an access-denied experience).",
+      "manualInstructions": "Entra admin center > Identity > Users > User settings > 'Restrict access to Microsoft Entra admin center' = Yes."
+    },
+    {
+      "id": "EntraID-AuthMethodsHardening",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "authenticatorEnabled": true, "smsEnabled": false, "voiceEnabled": false },
+      "description": "Microsoft Authenticator is enabled as an authentication method while SMS and voice call methods are disabled tenant-wide."
+    },
+    {
+      "id": "EntraID-MfaRegistrationCampaign",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "state": "enabled", "snoozeDurationInDays": 1 },
+      "description": "Users who have not registered strong MFA methods are nudged to do so at sign-in, with a short snooze window."
+    },
+    {
+      "id": "EntraID-AdminPasswordResetNotification",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": false,
+      "desiredValue": true,
+      "description": "Other admins are notified by email whenever an admin's password is reset.",
+      "manualInstructions": "Entra admin center > Identity > Users > User settings > Notify all admins when other admins reset their password = Yes."
+    },
+    {
+      "id": "ExchangeOnline-MailboxAuditingDefault",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Mailbox auditing is enabled by default for all mailboxes in the organization."
+    },
+    {
+      "id": "ExchangeOnline-AntiSpamInbound",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "bulkThreshold": 6, "highConfidenceSpamAction": "Quarantine", "spamAction": "Quarantine" },
+      "description": "Inbound anti-spam policy quarantines high-confidence spam and uses a strict bulk-mail threshold."
+    },
+    {
+      "id": "ExchangeOnline-AntiPhishing",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "spoofIntelligence": true, "mailboxIntelligence": true, "mailboxIntelligenceProtection": true },
+      "description": "Anti-phishing policy has spoof intelligence and mailbox intelligence protection enabled."
+    },
+    {
+      "id": "ExchangeOnline-AntiMalwareAttachmentFilter",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "The malware filter policy blocks common dangerous attachment file types."
+    },
+    {
+      "id": "ExchangeOnline-ExternalSenderTag",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Outlook tags messages from external senders so users can spot them at a glance."
+    },
+    {
+      "id": "ExchangeOnline-DisableAutoForwarding",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "Off",
+      "description": "Automatic forwarding of mail to external domains is blocked tenant-wide."
+    },
+    {
+      "id": "ExchangeOnline-DisableSmtpAuth",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Tenant-wide basic authentication for SMTP AUTH clients is disabled."
+    },
+    {
+      "id": "ExchangeOnline-DkimSigning",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "domains": [] },
+      "description": "DKIM signing is enabled for every accepted domain that sends mail. REQUIRES CONFIGURATION: populate desiredValue.domains with your organization's accepted domain names before running Apply - this cannot have a safe universal default.",
+      "requiresPopulatedFields": ["domains"]
+    },
+    {
+      "id": "Teams-BlockConsumerContact",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "allowTeamsConsumer": false, "allowTeamsConsumerInbound": false },
+      "description": "Users cannot communicate with or accept contact requests from unmanaged consumer Teams/Skype accounts."
+    },
+    {
+      "id": "Teams-RestrictFederation",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "mode": "AllowSpecific", "allowedDomains": [] },
+      "description": "External Teams federation is restricted to an explicit allow-list of partner domains. REQUIRES CONFIGURATION: an empty allowedDomains list with mode 'AllowSpecific' blocks federation with every external domain - populate allowedDomains, or run Apply with -AcknowledgeFederationBlockAll if a full block is genuinely intended.",
+      "requiresPopulatedFields": ["allowedDomains"]
+    },
+    {
+      "id": "Teams-MeetingJoinDefaults",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "autoAdmittedUsers": "EveryoneInCompanyExcludingGuests", "allowAnonymousUsersToJoinMeeting": false },
+      "description": "Meeting lobby defaults keep anonymous users out and require internal users to be admitted automatically only within the org."
+    },
+    {
+      "id": "Teams-AppPermissionPolicy",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "globalCatalogAppsType": "BlockedAppList" },
+      "description": "Third-party Teams apps from the global catalog are blocked by default (allow-list model)."
+    },
+    {
+      "id": "Teams-GuestAccessDefault",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": false,
+      "description": "Guest access to Teams is disabled tenant-wide by default."
+    },
+    {
+      "id": "SharePointOnline-SharingCapability",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "ExternalUserSharingOnly",
+      "description": "Tenant-wide external sharing ceiling for SharePoint and OneDrive is limited to existing guests (no anonymous links)."
+    },
+    {
+      "id": "SharePointOnline-DefaultSharingLinkType",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "Direct",
+      "description": "The default sharing link type is 'Specific people' rather than broad org-wide or anonymous links."
+    },
+    {
+      "id": "SharePointOnline-DefaultLinkPermission",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "View",
+      "description": "The default permission granted by a new sharing link is view-only, not edit."
+    },
+    {
+      "id": "SharePointOnline-AnonymousLinkExpiration",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": 30,
+      "description": "Anonymous 'Anyone' links automatically expire after 30 days."
+    },
+    {
+      "id": "SharePointOnline-LegacyAuthProtocols",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": false,
+      "description": "Legacy (non-modern-auth) client protocols are blocked from accessing SharePoint and OneDrive."
+    },
+    {
+      "id": "SharePointOnline-IdleSessionSignOut",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "enabled": true, "warnAfterMinutes": 15, "signOutAfterMinutes": 20 },
+      "description": "Idle browser sessions in SharePoint/OneDrive are warned and then signed out automatically."
+    },
+    {
+      "id": "SharePointOnline-UnmanagedDeviceAccess",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "AllowLimitedAccess",
+      "description": "Unmanaged/unknown devices get limited (web-only, no download) access to SharePoint and OneDrive instead of full access."
+    }
+  ]
+}

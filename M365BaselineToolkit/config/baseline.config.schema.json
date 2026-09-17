@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.org/m365baselinetoolkit/baseline.config.schema.json",
+  "title": "M365 Baseline Toolkit - Desired State Configuration",
+  "description": "Data-only desired-state definition for the M365 Baseline Toolkit. This file must never contain executable PowerShell - only typed values describing what each control's desired state should be. Control logic lives in the PowerShell modules under /modules.",
+  "type": "object",
+  "required": ["schemaVersion", "baselineSource", "controls"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Version of this config schema. Must match a version this toolkit understands.",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "baselineSource": {
+      "type": "string",
+      "description": "Human-readable citation for where this baseline came from (e.g. a CIS benchmark version)."
+    },
+    "controls": {
+      "type": "array",
+      "description": "One entry per control. Every id here must have a matching Get-<id>State/Set-<id>State function pair in the control catalog, and every catalog function pair must be referenced here - the orchestrator treats a mismatch in either direction as a validation error.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "workload", "enabled", "automatable", "desiredValue", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable control identifier. Must match the suffix used by the control catalog's Get-<id>State/Set-<id>State function names.",
+            "pattern": "^[A-Za-z0-9]+-[A-Za-z0-9]+$"
+          },
+          "workload": {
+            "type": "string",
+            "description": "Which M365 workload this control belongs to / which connection it primarily requires.",
+            "enum": ["EntraID", "ExchangeOnline", "Teams", "SharePointOnline"]
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this control is evaluated/applied on this run. Disabled controls are skipped entirely and excluded from reports."
+          },
+          "automatable": {
+            "type": "boolean",
+            "description": "false = audit-only; no supported Set- action exists. Such controls are always reported, never silently applied, and Apply/Restore mark them Skipped-Manual."
+          },
+          "desiredValue": {
+            "description": "Typed desired value for this control. Shape is control-specific (string, bool, number, array, or object) and is defined by the control's Get-/Set- function contract, never by executable syntax."
+          },
+          "description": {
+            "type": "string",
+            "description": "Short human-readable explanation of what the control does, shown in reports."
+          },
+          "complianceMode": {
+            "type": "string",
+            "description": "How to compare current vs. desired value. Equality (default) does a deep structural comparison. Range treats desiredValue as {min,max} and current Value as a number.",
+            "enum": ["Equality", "Range"]
+          },
+          "manualInstructions": {
+            "type": "string",
+            "description": "Required when automatable is false. Points the admin at the exact GUI location to change this setting by hand."
+          },
+          "requiresPopulatedFields": {
+            "type": "array",
+            "description": "Names of top-level properties inside desiredValue that must be non-empty (non-empty array/string) before Apply is allowed to run for this control, because no safe universal default exists (e.g. tenant-specific domain lists).",
+            "items": { "type": "string" }
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "automatable": { "const": false } } },
+            "then": { "required": ["manualInstructions"] }
+          }
+        ]
+      }
+    }
+  }
+}
