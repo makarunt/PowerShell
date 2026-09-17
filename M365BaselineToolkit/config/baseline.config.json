@@ -93,6 +93,14 @@
       "manualInstructions": "Entra admin center > Identity > Users > User settings > Notify all admins when other admins reset their password = Yes."
     },
     {
+      "id": "ExchangeOnline-ExternalSenderTag",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Outlook tags messages from external senders so users can spot them at a glance. Read first among ExchangeOnline-* controls on purpose - see EntraIdControls/ExchangeOnlineControls modules and README for why."
+    },
+    {
       "id": "ExchangeOnline-MailboxAuditingDefault",
       "workload": "ExchangeOnline",
       "enabled": true,
@@ -123,14 +131,6 @@
       "automatable": true,
       "desiredValue": true,
       "description": "The malware filter policy blocks common dangerous attachment file types."
-    },
-    {
-      "id": "ExchangeOnline-ExternalSenderTag",
-      "workload": "ExchangeOnline",
-      "enabled": true,
-      "automatable": true,
-      "desiredValue": true,
-      "description": "Outlook tags messages from external senders so users can spot them at a glance."
     },
     {
       "id": "ExchangeOnline-DisableAutoForwarding",

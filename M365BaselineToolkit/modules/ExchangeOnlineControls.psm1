@@ -254,24 +254,28 @@ function Get-ExchangeOnline-ExternalSenderTagState {
         Online reads in the same session - reproduced standalone, entirely outside
         this toolkit, by firing the other ExchangeOnline-* controls' cmdlets first
         and then calling Get-ExternalInOutlook right after; an isolated call with no
-        preceding burst always succeeds. This audit calls 7-8 other Exchange Online
-        cmdlets in the second or two before it reaches this control, which is enough
-        to trip whatever rate limit that beta endpoint has - Microsoft's own error
-        handling then fails to decode the real 403 response body (a
-        compression/JSON-parsing bug in its own fallback path) and reports a generic
-        "server side error" instead of the real reason. A short pause before the
-        first attempt gives that window time to clear; -ErrorAction SilentlyContinue
-        on the call itself keeps a mid-retry Write-Error inside
-        Get-ExternalInOutlook's own implementation from aborting under this
-        toolkit's global $ErrorActionPreference = 'Stop'.
+        preceding burst always succeeds. Padding this call with sleeps could not
+        reliably outwait it (confirmed on a second, unrelated tenant/machine), so
+        the actual fix is structural: config/baseline.config.json orders
+        ExchangeOnline-ExternalSenderTag first among the ExchangeOnline-* controls,
+        so this read happens before the burst of other Exchange Online calls this
+        audit makes, not after it - removing the trigger condition rather than
+        trying to wait it out. (Microsoft's own error handling separately fails to
+        decode the real 403 response body - a compression/JSON-parsing bug in its
+        own fallback path - and reports a generic "server side error" instead of
+        the real reason; that's what masked the actual cause for a while.) The
+        short retry below is just an ordinary safety net for genuine transient
+        blips, not a rate-limit workaround. -ErrorAction SilentlyContinue on the
+        call itself keeps a mid-retry Write-Error inside Get-ExternalInOutlook's
+        own implementation from aborting under this toolkit's global
+        $ErrorActionPreference = 'Stop'.
     .EXAMPLE
         Get-ExchangeOnline-ExternalSenderTagState
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param()
-    Start-Sleep -Seconds 5
-    $maxAttempts = 3
+    $maxAttempts = 2
     $lastError = $null
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         $cfg = Get-ExternalInOutlook -ErrorAction SilentlyContinue -ErrorVariable getError
@@ -283,9 +287,9 @@ function Get-ExchangeOnline-ExternalSenderTagState {
         # ToString(), so this can't itself throw under StrictMode the way a property
         # chain that assumes one specific object shape can.
         $lastError = if ($getError -and $getError.Count -gt 0) { [string]$getError[0] } else { 'no result returned' }
-        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 10 }
+        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 3 }
     }
-    throw "Get-ExternalInOutlook failed after $maxAttempts attempt(s), each preceded by a pause to clear any rate limit from preceding calls: $lastError"
+    throw "Get-ExternalInOutlook failed after $maxAttempts attempt(s): $lastError"
 }
 
 function Set-ExchangeOnline-ExternalSenderTagState {
