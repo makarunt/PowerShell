@@ -132,13 +132,22 @@ error.
 By default every run disconnects from Graph/Exchange Online/Teams/SharePoint
 when it finishes, even on failure, so no session is left authenticated
 longer than one run. Add `-KeepConnectionsOpen` to skip that teardown while
-you're iterating — each `Connect-*` cmdlet silently reuses the existing
-session instead of prompting again:
+you're iterating:
 ```powershell
 ./Invoke-M365Baseline.ps1 -Mode Audit -SharePointAdminUrl https://contoso-admin.sharepoint.com -KeepConnectionsOpen
 ```
-Close the PowerShell window when you're actually done to clear the sessions
-for good. This flag works the same way in Apply/Restore.
+The `Connect-*` cmdlets these services provide don't check for an existing
+session themselves - each one unconditionally starts a fresh interactive
+sign-in whenever it's called, live session or not. So the toolkit tracks
+which connections are still live (in a session-global variable, so it
+survives the module reloads between separate runs of the script) and skips
+calling `Connect-*` again for anything already connected - that's what
+actually avoids the repeat prompts, not `-KeepConnectionsOpen` alone. A run
+that omits `-KeepConnectionsOpen` still disconnects everything at the end,
+including a connection reused from an earlier run in the same window, so the
+*next* run after that reconnects from scratch as expected. Close the
+PowerShell window when you're actually done to clear the sessions for good.
+This flag works the same way in Apply/Restore.
 
 ### Apply — backs up, then converges non-compliant controls
 

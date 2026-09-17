@@ -168,10 +168,18 @@ try {
     }
 
     foreach ($conn in $requiredConnections) {
-        Write-BaselineHost "Connecting to $conn..." 'Cyan'
-        Connect-BaselineWorkload -Connection $conn -SharePointAdminUrl $SharePointAdminUrl
+        if (Test-BaselineWorkloadConnected -Connection $conn) {
+            Write-BaselineHost "Reusing existing $conn connection (left open by -KeepConnectionsOpen on a prior run in this window)." 'DarkGray'
+        }
+        else {
+            Write-BaselineHost "Connecting to $conn..." 'Cyan'
+            Connect-BaselineWorkload -Connection $conn -SharePointAdminUrl $SharePointAdminUrl
+            Write-BaselineHost "Connected to $conn." 'Green'
+        }
+        # Tracked either way: if THIS run doesn't pass -KeepConnectionsOpen, a
+        # connection reused from an earlier run should still be disconnected
+        # at the end, same as one this run established itself.
         $connectedServices.Add($conn)
-        Write-BaselineHost "Connected to $conn." 'Green'
     }
 
     switch ($Mode) {

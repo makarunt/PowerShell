@@ -595,10 +595,77 @@ function Get-BaselineConnectionOrder {
     return ,[string[]]($script:WorkloadModuleMap.Keys | Where-Object { $distinct -contains $_ })
 }
 
+function Test-BaselineWorkloadConnected {
+    <#
+    .SYNOPSIS
+        Checks whether a connection was left open by a prior run in this same
+        PowerShell session (via -KeepConnectionsOpen).
+    .DESCRIPTION
+        Connect-MgGraph, Connect-ExchangeOnline, Connect-MicrosoftTeams, and
+        Connect-SPOService do not check for an existing session themselves -
+        each one unconditionally starts a fresh interactive sign-in whenever
+        it's called, live session or not. So merely skipping the disconnect
+        step (-KeepConnectionsOpen) does nothing on its own; the caller also
+        has to skip re-calling Connect- for a connection that's already live.
+        Tracking state lives in a true PowerShell session global variable
+        (not a module-scoped one) because Invoke-M365Baseline.ps1 re-imports
+        this module with -Force on every run, which would otherwise reset
+        module-scoped state and defeat the whole point.
+    .PARAMETER Connection
+        'Graph', 'ExchangeOnline', 'Teams', or 'SharePointOnline'.
+    .EXAMPLE
+        Test-BaselineWorkloadConnected -Connection Graph
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Graph', 'ExchangeOnline', 'Teams', 'SharePointOnline')]
+        [string]$Connection
+    )
+    if (-not (Test-Path Variable:Global:M365BaselineActiveConnections)) { return $false }
+    return [bool]$Global:M365BaselineActiveConnections.Contains($Connection)
+}
+
+function Set-BaselineWorkloadConnectedState {
+    <#
+    .SYNOPSIS
+        Internal: records that a connection is (or is no longer) live in the
+        session-global tracking set used by Test-BaselineWorkloadConnected.
+    .PARAMETER Connection
+        'Graph', 'ExchangeOnline', 'Teams', or 'SharePointOnline'.
+    .PARAMETER Connected
+        $true to mark it live, $false to clear it.
+    .EXAMPLE
+        Set-BaselineWorkloadConnectedState -Connection Graph -Connected $true
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Graph', 'ExchangeOnline', 'Teams', 'SharePointOnline')]
+        [string]$Connection,
+
+        [Parameter(Mandatory)]
+        [bool]$Connected
+    )
+    if (-not (Test-Path Variable:Global:M365BaselineActiveConnections)) {
+        $Global:M365BaselineActiveConnections = [System.Collections.Generic.HashSet[string]]::new()
+    }
+    if ($Connected) { [void]$Global:M365BaselineActiveConnections.Add($Connection) }
+    else { [void]$Global:M365BaselineActiveConnections.Remove($Connection) }
+}
+
 function Connect-BaselineWorkload {
     <#
     .SYNOPSIS
         Establishes a connection for a single backend service, once per run.
+    .DESCRIPTION
+        Always performs a real connection attempt - callers that want to reuse
+        a connection left open by a prior run (-KeepConnectionsOpen) should
+        check Test-BaselineWorkloadConnected first and skip calling this at
+        all when it returns $true, since Connect-MgGraph/Connect-ExchangeOnline/
+        Connect-MicrosoftTeams/Connect-SPOService each start a fresh interactive
+        sign-in unconditionally rather than detecting an existing session.
     .PARAMETER Connection
         'Graph', 'ExchangeOnline', 'Teams', or 'SharePointOnline'.
     .PARAMETER SharePointAdminUrl
@@ -662,6 +729,8 @@ function Connect-BaselineWorkload {
     catch {
         throw "Failed to connect to $Connection`: $($_.Exception.Message). Verify the account has the admin role required for this workload (see README.md)."
     }
+
+    Set-BaselineWorkloadConnectedState -Connection $Connection -Connected $true
 }
 
 function Disconnect-BaselineWorkload {
@@ -689,6 +758,12 @@ function Disconnect-BaselineWorkload {
     }
     catch {
         Write-Verbose "Non-fatal: disconnect from $Connection reported: $($_.Exception.Message)"
+    }
+    finally {
+        # Clear the tracking flag even if the disconnect call itself failed:
+        # better to reconnect fresh next run than to treat a possibly-broken
+        # session as reusable.
+        Set-BaselineWorkloadConnectedState -Connection $Connection -Connected $false
     }
 }
 
@@ -1401,6 +1476,8 @@ Export-ModuleMember -Function @(
     'Install-BaselineRequiredModule'
     'Assert-BaselineRequiredModules'
     'Get-BaselineConnectionOrder'
+    'Test-BaselineWorkloadConnected'
+    'Set-BaselineWorkloadConnectedState'
     'Connect-BaselineWorkload'
     'Disconnect-BaselineWorkload'
     'Invoke-BaselineControlAudit'
