@@ -248,6 +248,12 @@ try {
             $skippedOk = @($applyResults | Where-Object { $_.Status -eq 'Skipped-AlreadyCompliant' })
 
             Write-BaselineHost "`nApply complete. Succeeded: $($succeeded.Count). Already compliant: $($skippedOk.Count). Manual/skipped: $($skippedManual.Count). Failed: $($failed.Count)." 'Cyan'
+
+            if ($skippedManual.Count -gt 0) {
+                Write-BaselineHost "`nControls with no automated fix available (no suitable API exists) - change these by hand:" 'Yellow'
+                foreach ($m in $skippedManual) { Write-BaselineHost "  $($m.Id): $($m.Message)" 'Yellow' }
+            }
+
             if ($failed.Count -gt 0) {
                 Write-BaselineHost "`nFailures:" 'Red'
                 foreach ($f in $failed) { Write-BaselineHost "  $($f.Id): $($f.Message)" 'Red' }

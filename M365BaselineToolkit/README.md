@@ -171,6 +171,17 @@ short-circuits every `Set-` call (via `SupportsShouldProcess`) but still
 performs the real pre-change backup/report — local files are never part of
 the simulated action, only the tenant-mutating calls are.
 
+If any control has no suitable API to be configured automatically (no `Set-`
+action exists, or Microsoft hasn't published a stable way to set it), Apply
+prints a dedicated summary of exactly those controls and where to fix them
+by hand directly in the console once the run finishes, in addition to
+recording them in the post-change report:
+```
+Controls with no automated fix available (no suitable API exists) - change these by hand:
+  EntraID-GlobalAdminCount: Entra admin center > Identity > Roles & administrators > Global Administrator > review and adjust role assignments.
+  ...
+```
+
 Writes, per run: a pre-change snapshot/backup and report, an append-only
 change log (`reports/changelog_<timestamp>.jsonl`, one JSON object per
 control per attempt: timestamp, id, workload, previous value, attempted
