@@ -97,6 +97,23 @@ trade-off here.
     `Policy.ReadWrite.Authorization` / `Policy.ReadWrite.AuthenticationMethod`
     rights) — all remaining `EntraID-*` controls, including reading Global
     Administrator role membership.
+  - **Conditional Access Administrator** (or a role with
+    `Policy.ReadWrite.ConditionalAccess` rights), plus enough rights to manage
+    the toolkit's placeholder emergency-access group
+    (`Group.ReadWrite.All`) and read service principals
+    (`Application.Read.All`, used to verify the built-in "Microsoft Azure
+    Management" app before referencing it) — all `CA-*` controls. See
+    [Conditional Access controls (report-only)](#conditional-access-controls-report-only)
+    below before enabling these.
+- Required Graph scopes requested on connect: `Policy.ReadWrite.Authorization`,
+  `Policy.ReadWrite.AuthenticationMethod`, `Directory.Read.All`,
+  `RoleManagement.Read.Directory`, `Organization.Read.All` (license checks -
+  see below), `Policy.ReadWrite.ConditionalAccess`, `Group.ReadWrite.All`,
+  `Application.Read.All`. Requested on every Graph connection regardless of
+  which controls are enabled this run — consenting to a scope costs nothing
+  on a tenant that can't use the feature behind it (e.g.
+  `Policy.ReadWrite.ConditionalAccess` consents fine on Entra ID Free; it's
+  actually reading/writing a CA policy that the license gate below prevents).
 - Required modules: `Microsoft.Graph` (v2+), `ExchangeOnlineManagement`,
   `MicrosoftTeams` (v6+), `Microsoft.Online.SharePoint.PowerShell`. The
   toolkit checks these at the start of every run and can install missing
@@ -324,9 +341,72 @@ this toolkit's code but worth being aware of if you're extending it further:
 singleton, so `-BodyParameter` alone is the only reliable call shape across
 SDK versions. And Exchange Online's built-in default anti-phish policy is
 actually named `"Office365 AntiPhish Default"`, not `"Default"` like the
-other default policies (`ExchangeOnline-AntiPhishing` now resolves it
-dynamically via each policy's `IsDefault` flag instead of hardcoding either
-name).
+other default policies (`ExchangeOnline-AntiPhishingSpoofIntelligence`/
+`ExchangeOnline-AntiPhishingMailboxIntelligence` now resolve it dynamically
+via each policy's `IsDefault` flag instead of hardcoding either name).
+
+## Conditional Access controls (report-only)
+
+The `CA-*` controls (`workload: "ConditionalAccess"` in config) create or
+update a small set of Microsoft-recommended Conditional Access (CA) policies.
+
+**Every policy this toolkit ever creates or updates is set to
+`state = "enabledForReportingButNotEnforced"` ("report-only"). No code path in
+this toolkit ever enables/enforces a CA policy. Turning any of these on is a
+manual, deliberate step you take yourself later, in the Entra admin center,
+after reviewing what the report-only sign-in logs show it would have done.**
+
+### Licensing (Tier 1 / Tier 2)
+
+Conditional Access requires Entra ID P1 at minimum; two controls
+(`CA-RequireMfaSignInRisk`, `CA-RequirePasswordChangeUserRisk`) use
+Identity Protection risk signals and require Entra ID P2. Each config entry
+under `workload: "ConditionalAccess"` has a `tier` field:
+
+- **Tier 1** — needs Entra ID P1 (or P2, which is a superset).
+- **Tier 2** — needs Entra ID P2 specifically.
+
+The toolkit checks this itself (`Test-TenantServicePlan`, shared with
+`ExchangeOnline-AntiPhishingMailboxIntelligence`'s Defender for Office 365
+gate) — no license, no attempt:
+
+- **Entra ID Free** — the whole CA module is skipped. Every `CA-*` control
+  reports `Skipped-LicenseInsufficient`; nothing is read or written. The
+  other five workload modules (EntraID directory settings, Exchange, Teams,
+  SharePoint/OneDrive) are unaffected and keep running on Entra ID Free as
+  they always have.
+- **Entra ID P1** — Tier 1 controls run; Tier 2 controls report
+  `Skipped-LicenseInsufficient`.
+- **Entra ID P2** — everything runs.
+
+### Idempotency, overlap detection, and the emergency-access group
+
+Every policy this toolkit manages is named with the fixed prefix
+`"[M365 Baseline] "` (e.g. `"[M365 Baseline] Require MFA for all users"`) and
+matched by exact display name — safe to re-run, same as every other control
+in this toolkit. Before *creating* a toolkit-owned policy (never before
+updating one that already exists), the toolkit scans every other existing CA
+policy in the tenant for a heuristic match (matching grant controls plus a
+matching condition, e.g. an existing MFA-for-all-users policy under any
+name) and skips creation — reported as `Skipped-PotentialOverlap`, naming the
+conflicting policy — rather than risk creating a duplicate/conflicting
+policy. If you've reviewed the conflict and still want this toolkit's
+report-only policy created alongside it, set `forceCreateDespiteOverlap: true`
+on that control in `config/baseline.config.json` and re-run.
+
+A placeholder security group, `"M365 Baseline - Emergency Access Accounts (DO
+NOT DELETE)"`, is created (empty) automatically the first time Apply needs it
+and excluded from every policy's user condition. Populate it yourself with
+your organization's actual break-glass accounts — this toolkit only ensures
+the group exists and is wired into every policy; it never adds members to it.
+
+### Non-goals
+
+This module deliberately does not include named-location/trusted-IP/
+country-based policies, device-compliance or hybrid-join-based policies, or
+any mechanism (flagged or otherwise) to auto-promote a report-only policy to
+enabled. If you want any of that, build it as a clearly-separate, explicitly
+opt-in addition — never modify this module to make report-only optional.
 
 ## If something goes wrong mid-run
 

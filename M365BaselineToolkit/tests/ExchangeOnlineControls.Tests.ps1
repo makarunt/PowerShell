@@ -109,3 +109,95 @@ Describe 'ExchangeOnline-DisableSmtpAuth' {
         }
     }
 }
+
+Describe 'ExchangeOnline-AntiPhishing (split into a base-EOP control and a Defender-for-O365-gated control)' {
+
+    BeforeEach {
+        # Re-imports with -Force on every test, exactly like Invoke-M365Baseline.ps1
+        # does on every real run: BaselineCore's Get-BaselineSubscribedSkuCache is
+        # module-scoped and would otherwise leak one test's mocked tenant license
+        # into the next.
+        Import-Module (Join-Path $PSScriptRoot '../modules/BaselineCore.psm1') -Force
+        Import-Module (Join-Path $PSScriptRoot '../modules/ExchangeOnlineControls.psm1') -Force
+
+        Mock -CommandName Get-AntiPhishPolicy -ModuleName ExchangeOnlineControls -MockWith {
+            param($Identity)
+            $policy = [pscustomobject]@{ Identity = 'Office365 AntiPhish Default'; IsDefault = $true; EnableSpoofIntelligence = $true; EnableMailboxIntelligence = $false; EnableMailboxIntelligenceProtection = $false }
+            if ($Identity) { return $policy }
+            return @($policy)
+        }
+        Mock -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -MockWith { }
+    }
+
+    Context 'ExchangeOnline-AntiPhishingSpoofIntelligence (base EOP, no license gate)' {
+        It 'always runs, even without any Defender for Office 365 service plan' {
+            Mock -CommandName Get-MgSubscribedSku -ModuleName BaselineCore -MockWith { @([pscustomobject]@{ ServicePlans = @([pscustomobject]@{ ServicePlanName = 'EXCHANGE_S_STANDARD'; ProvisioningStatus = 'Success' }) }) }
+
+            $result = Set-ExchangeOnline-AntiPhishingSpoofIntelligenceState -DesiredValue ([pscustomobject]@{ enableSpoofIntelligence = $true }) -CurrentValue ([pscustomobject]@{ enableSpoofIntelligence = $false })
+
+            $result.Status | Should -Be 'Success'
+            Should -Invoke -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -Times 1 -ParameterFilter {
+                $PSBoundParameters.ContainsKey('EnableSpoofIntelligence') -and
+                    -not $PSBoundParameters.ContainsKey('EnableMailboxIntelligence') -and
+                    -not $PSBoundParameters.ContainsKey('EnableMailboxIntelligenceProtection')
+            }
+        }
+    }
+
+    Context 'ExchangeOnline-AntiPhishingMailboxIntelligence (Defender for Office 365 Plan 1/2 gated)' {
+        It 'reports Skipped-LicenseInsufficient and never calls Set-AntiPhishPolicy without ATP_ENTERPRISE/THREAT_INTELLIGENCE' {
+            Mock -CommandName Get-MgSubscribedSku -ModuleName BaselineCore -MockWith { @([pscustomobject]@{ ServicePlans = @([pscustomobject]@{ ServicePlanName = 'EXCHANGE_S_STANDARD'; ProvisioningStatus = 'Success' }) }) }
+
+            (Get-ExchangeOnline-AntiPhishingMailboxIntelligenceState).Value | Should -Be $null
+
+            $result = Set-ExchangeOnline-AntiPhishingMailboxIntelligenceState -DesiredValue ([pscustomobject]@{ enableMailboxIntelligence = $true; enableMailboxIntelligenceProtection = $true }) -CurrentValue $null
+            $result.Status | Should -Be 'Skipped-LicenseInsufficient'
+            $result.Message | Should -Match 'ATP_ENTERPRISE'
+            # The whole point of the gate: not even a call with just the spoof-style
+            # subset happens - Set-AntiPhishPolicy is not called AT ALL when the
+            # gate fails, mailbox-intelligence parameters included.
+            Should -Invoke -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -Times 0
+        }
+
+        It 'proceeds and passes only the mailbox-intelligence parameters when ATP_ENTERPRISE (Defender for O365 Plan 1) is present' {
+            Mock -CommandName Get-MgSubscribedSku -ModuleName BaselineCore -MockWith { @([pscustomobject]@{ ServicePlans = @([pscustomobject]@{ ServicePlanName = 'ATP_ENTERPRISE'; ProvisioningStatus = 'Success' }) }) }
+
+            $result = Set-ExchangeOnline-AntiPhishingMailboxIntelligenceState -DesiredValue ([pscustomobject]@{ enableMailboxIntelligence = $true; enableMailboxIntelligenceProtection = $true }) -CurrentValue ([pscustomobject]@{ enableMailboxIntelligence = $false; enableMailboxIntelligenceProtection = $false })
+
+            $result.Status | Should -Be 'Success'
+            Should -Invoke -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -Times 1 -ParameterFilter {
+                $PSBoundParameters.ContainsKey('EnableMailboxIntelligence') -and
+                    $PSBoundParameters.ContainsKey('EnableMailboxIntelligenceProtection') -and
+                    -not $PSBoundParameters.ContainsKey('EnableSpoofIntelligence')
+            }
+        }
+
+        It 'proceeds when THREAT_INTELLIGENCE (Defender for O365 Plan 2) is present instead' {
+            Mock -CommandName Get-MgSubscribedSku -ModuleName BaselineCore -MockWith { @([pscustomobject]@{ ServicePlans = @([pscustomobject]@{ ServicePlanName = 'THREAT_INTELLIGENCE'; ProvisioningStatus = 'Success' }) }) }
+            (Get-ExchangeOnline-AntiPhishingMailboxIntelligenceState).Value | Should -Not -Be $null
+        }
+    }
+}
+
+Describe 'No stale references to the old single ExchangeOnline-AntiPhishing control id remain' {
+
+    It 'config/baseline.config.json does not reference the pre-split control id' {
+        $configPath = Join-Path $PSScriptRoot '../config/baseline.config.json'
+        $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -Depth 25
+        $config.controls.id | Should -Not -Contain 'ExchangeOnline-AntiPhishing'
+        $config.controls.id | Should -Contain 'ExchangeOnline-AntiPhishingSpoofIntelligence'
+        $config.controls.id | Should -Contain 'ExchangeOnline-AntiPhishingMailboxIntelligence'
+    }
+
+    It 'the schema/config/README do not contain the literal string "ExchangeOnline-AntiPhishing" followed by anything other than SpoofIntelligence/MailboxIntelligence' {
+        $paths = @(
+            (Join-Path $PSScriptRoot '../config/baseline.config.schema.json')
+            (Join-Path $PSScriptRoot '../config/baseline.config.json')
+            (Join-Path $PSScriptRoot '../README.md')
+        )
+        foreach ($path in $paths) {
+            $matches = [regex]::Matches((Get-Content -LiteralPath $path -Raw), 'ExchangeOnline-AntiPhishing(?!SpoofIntelligence|MailboxIntelligence)')
+            $matches.Count | Should -Be 0 -Because "found a stale bare 'ExchangeOnline-AntiPhishing' reference in $path"
+        }
+    }
+}

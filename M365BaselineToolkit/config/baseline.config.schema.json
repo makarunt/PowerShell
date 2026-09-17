@@ -33,7 +33,7 @@
           "workload": {
             "type": "string",
             "description": "Which M365 workload this control belongs to / which connection it primarily requires.",
-            "enum": ["EntraID", "ExchangeOnline", "Teams", "SharePointOnline"]
+            "enum": ["EntraID", "ExchangeOnline", "Teams", "SharePointOnline", "ConditionalAccess"]
           },
           "enabled": {
             "type": "boolean",
@@ -63,12 +63,25 @@
             "type": "array",
             "description": "Names of top-level properties inside desiredValue that must be non-empty (non-empty array/string) before Apply is allowed to run for this control, because no safe universal default exists (e.g. tenant-specific domain lists).",
             "items": { "type": "string" }
+          },
+          "tier": {
+            "type": "integer",
+            "description": "Required for workload: ConditionalAccess. 1 = requires Entra ID P1 (or P2). 2 = requires Entra ID P2 specifically. Ignored for every other workload.",
+            "enum": [1, 2]
+          },
+          "forceCreateDespiteOverlap": {
+            "type": "boolean",
+            "description": "ConditionalAccess controls only. When a non-toolkit-owned CA policy heuristically looks like it already covers this control, creation is skipped by default (Skipped-PotentialOverlap) - set true, after reviewing the conflicting policy, to create this toolkit-owned report-only policy alongside it anyway. Defaults to false. Ignored for every other workload."
           }
         },
         "allOf": [
           {
             "if": { "properties": { "automatable": { "const": false } } },
             "then": { "required": ["manualInstructions"] }
+          },
+          {
+            "if": { "properties": { "workload": { "const": "ConditionalAccess" } } },
+            "then": { "required": ["tier"] }
           }
         ]
       }

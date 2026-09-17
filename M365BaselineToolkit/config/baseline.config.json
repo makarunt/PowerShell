@@ -117,12 +117,20 @@
       "description": "Inbound anti-spam policy quarantines high-confidence spam and uses a strict bulk-mail threshold."
     },
     {
-      "id": "ExchangeOnline-AntiPhishing",
+      "id": "ExchangeOnline-AntiPhishingSpoofIntelligence",
       "workload": "ExchangeOnline",
       "enabled": true,
       "automatable": true,
-      "desiredValue": { "spoofIntelligence": true, "mailboxIntelligence": true, "mailboxIntelligenceProtection": true },
-      "description": "Anti-phishing policy has spoof intelligence and mailbox intelligence protection enabled."
+      "desiredValue": { "enableSpoofIntelligence": true },
+      "description": "Anti-phishing policy has spoof intelligence enabled. Base Exchange Online Protection (EOP) - available on every Exchange Online plan, including Microsoft 365 Business Basic/Standard."
+    },
+    {
+      "id": "ExchangeOnline-AntiPhishingMailboxIntelligence",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "enableMailboxIntelligence": true, "enableMailboxIntelligenceProtection": true },
+      "description": "Anti-phishing policy has mailbox intelligence and mailbox-intelligence-based impersonation protection enabled. Requires Defender for Office 365 Plan 1 or 2 - NOT included on Exchange Online Plan 1/2 alone or Microsoft 365 Business Basic/Standard. Skipped (Skipped-LicenseInsufficient) rather than failed on a tenant without that add-on."
     },
     {
       "id": "ExchangeOnline-AntiMalwareAttachmentFilter",
@@ -253,6 +261,86 @@
       "automatable": true,
       "desiredValue": "AllowLimitedAccess",
       "description": "Unmanaged/unknown devices get limited (web-only, no download) access to SharePoint and OneDrive instead of full access."
+    },
+    {
+      "id": "CA-RequireMfaAllUsers",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for all users on all cloud apps. Requires Entra ID P1. Created in state=enabledForReportingButNotEnforced - never enabled/enforced by this toolkit; a tenant admin reviews the report-only sign-in logs and enables it manually when ready."
+    },
+    {
+      "id": "CA-RequireMfaAdminRoles",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for the 14 privileged directory roles (Global Administrator, Privileged Role Administrator, etc). Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-BlockLegacyAuth",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy blocking legacy authentication (Exchange ActiveSync and other legacy clients) for all users on all cloud apps. Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequireMfaAzureManagement",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for all users accessing the Microsoft Azure Management app (Azure Portal/CLI/PowerShell/REST). Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequireMfaSecurityInfoRegistration",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA when a user registers security info (the 'register security information' user action). Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequireMfaGuestAccess",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for guest and external users of every type, on all cloud apps. Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequireMfaSignInRisk",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 2,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for medium or high sign-in risk. Requires Entra ID P2 (Identity Protection risk signals). Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequirePasswordChangeUserRisk",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 2,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA and a password change for high user risk. Requires Entra ID P2 (Identity Protection risk signals). Report-only means this never actually forces a password change - it only logs what would have happened. Report-only - see CA-RequireMfaAllUsers."
     }
   ]
 }

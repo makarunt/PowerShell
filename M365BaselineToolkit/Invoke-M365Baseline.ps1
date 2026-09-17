@@ -125,6 +125,7 @@ Import-Module (Join-Path $modulesDir 'EntraIdControls.psm1') -Force -Global -War
 Import-Module (Join-Path $modulesDir 'ExchangeOnlineControls.psm1') -Force -Global -WarningAction SilentlyContinue
 Import-Module (Join-Path $modulesDir 'TeamsControls.psm1') -Force -Global -WarningAction SilentlyContinue
 Import-Module (Join-Path $modulesDir 'SharePointOnlineControls.psm1') -Force -Global -WarningAction SilentlyContinue
+Import-Module (Join-Path $modulesDir 'ConditionalAccessControls.psm1') -Force -Global -WarningAction SilentlyContinue
 
 $exitCode = 0
 $connectedServices = [System.Collections.Generic.List[string]]::new()
@@ -154,7 +155,14 @@ try {
         }
     }
 
-    $requiredConnections = Get-BaselineConnectionOrder -Connections @($catalog | Select-Object -ExpandProperty Connection -Unique)
+    # Union of every catalog entry's primary Connection AND any ExtraConnections it
+    # declares (e.g. ExchangeOnline-AntiPhishingMailboxIntelligence's actual API calls
+    # are Exchange-only, but it also needs Graph for its Test-TenantServicePlan
+    # license check) - so a Graph connection is established whenever ANY enabled
+    # control needs one for ANY reason, not just controls whose primary connection is
+    # Graph. Get-BaselineConnectionOrder still enforces Graph-before-ExchangeOnline.
+    $neededConnections = @($catalog | ForEach-Object { @($_.Connection) + @($_.ExtraConnections) })
+    $requiredConnections = Get-BaselineConnectionOrder -Connections $neededConnections
     if ($Mode -eq 'Restore') {
         # Restore only needs connections for controls present in the snapshot AND still
         # in the current catalog; resolved after the snapshot is loaded, below.
@@ -180,6 +188,21 @@ try {
         # connection reused from an earlier run should still be disconnected
         # at the end, same as one this run established itself.
         $connectedServices.Add($conn)
+    }
+
+    if ($catalog | Where-Object { $_.Workload -eq 'ConditionalAccess' }) {
+        $caSummary = Get-BaselineConditionalAccessSummary
+        Write-BaselineHost "`nConditional Access controls:" 'Yellow'
+        if (-not $caSummary.Tier1Available) {
+            Write-BaselineHost "  Skipped: tenant has Entra ID Free, which does not support Conditional Access. No CA policy will be read or changed this run." 'Yellow'
+        }
+        else {
+            Write-BaselineHost "  Tier 1 (Entra ID P1) controls: evaluated." 'Yellow'
+            Write-BaselineHost "  Tier 2 (Entra ID P2) controls: $(if ($caSummary.Tier2Available) { 'evaluated.' } else { 'Skipped-LicenseInsufficient - tenant does not have Entra ID P2.' })" 'Yellow'
+            $groupState = if ($caSummary.EmergencyGroupId) { "exists (id $($caSummary.EmergencyGroupId))" } else { 'does not exist yet - will be created automatically if this run applies changes' }
+            Write-BaselineHost "  Emergency-access group '$($caSummary.EmergencyGroupDisplayName)': $groupState. Excluded from every policy's user condition." 'Yellow'
+            Write-BaselineHost "  IMPORTANT: every Conditional Access policy this toolkit creates or updates is set to state=$($caSummary.ReportOnlyState) (REPORT-ONLY). None is ever enabled/enforced by this toolkit - see README.md." 'Yellow'
+        }
     }
 
     switch ($Mode) {

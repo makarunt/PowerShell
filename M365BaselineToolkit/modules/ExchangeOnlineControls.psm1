@@ -136,38 +136,39 @@ function Set-ExchangeOnline-AntiSpamInboundState {
 }
 
 # ---------------------------------------------------------------------------
-# ExchangeOnline-AntiPhishing
+# ExchangeOnline-AntiPhishingSpoofIntelligence
 # ---------------------------------------------------------------------------
 
-function Get-ExchangeOnline-AntiPhishingState {
+function Get-ExchangeOnline-AntiPhishingSpoofIntelligenceState {
     <#
     .SYNOPSIS
-        Reads the default anti-phishing policy's spoof/mailbox intelligence settings.
+        Reads the default anti-phishing policy's spoof intelligence setting.
+    .DESCRIPTION
+        Spoof intelligence is base Exchange Online Protection (EOP) - available
+        on every Exchange Online plan, including Microsoft 365 Business Basic
+        and Standard. Unlike ExchangeOnline-AntiPhishingMailboxIntelligence,
+        this control has no license gate and always runs.
     .EXAMPLE
-        Get-ExchangeOnline-AntiPhishingState
+        Get-ExchangeOnline-AntiPhishingSpoofIntelligenceState
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param()
     $policy = Get-AntiPhishPolicy -Identity (Get-BaselineDefaultAntiPhishPolicyIdentity) -ErrorAction Stop
-    $value = [pscustomobject]@{
-        spoofIntelligence             = [bool]$policy.EnableSpoofIntelligence
-        mailboxIntelligence           = [bool]$policy.EnableMailboxIntelligence
-        mailboxIntelligenceProtection = [bool]$policy.EnableMailboxIntelligenceProtection
-    }
-    return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishing'; Value = $value }
+    $value = [pscustomobject]@{ enableSpoofIntelligence = [bool]$policy.EnableSpoofIntelligence }
+    return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishingSpoofIntelligence'; Value = $value }
 }
 
-function Set-ExchangeOnline-AntiPhishingState {
+function Set-ExchangeOnline-AntiPhishingSpoofIntelligenceState {
     <#
     .SYNOPSIS
-        Idempotently sets the default anti-phishing policy's intelligence settings.
+        Idempotently enables spoof intelligence on the default anti-phishing policy.
     .PARAMETER DesiredValue
-        Object: { spoofIntelligence, mailboxIntelligence, mailboxIntelligenceProtection } (all bool).
+        Object: { enableSpoofIntelligence: bool }.
     .PARAMETER CurrentValue
         Optional pre-fetched current value.
     .EXAMPLE
-        Set-ExchangeOnline-AntiPhishingState -DesiredValue ([pscustomobject]@{spoofIntelligence=$true;mailboxIntelligence=$true;mailboxIntelligenceProtection=$true})
+        Set-ExchangeOnline-AntiPhishingSpoofIntelligenceState -DesiredValue ([pscustomobject]@{enableSpoofIntelligence=$true})
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -179,16 +180,98 @@ function Set-ExchangeOnline-AntiPhishingState {
         [AllowNull()]
         [object]$CurrentValue
     )
-    $current = if ($null -ne $CurrentValue) { $CurrentValue } else { (Get-ExchangeOnline-AntiPhishingState).Value }
+    $current = if ($null -ne $CurrentValue) { $CurrentValue } else { (Get-ExchangeOnline-AntiPhishingSpoofIntelligenceState).Value }
     if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
-        return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishing'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+        return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishingSpoofIntelligence'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+    }
+    Set-AntiPhishPolicy -Identity (Get-BaselineDefaultAntiPhishPolicyIdentity) -EnableSpoofIntelligence:([bool]$DesiredValue.enableSpoofIntelligence) -ErrorAction Stop
+    return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishingSpoofIntelligence'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated AntiPhishPolicy Default EnableSpoofIntelligence.' }
+}
+
+# ---------------------------------------------------------------------------
+# ExchangeOnline-AntiPhishingMailboxIntelligence
+# ---------------------------------------------------------------------------
+
+# Either service plan satisfies the gate: THREAT_INTELLIGENCE is Defender for
+# Office 365 Plan 2's plan name, ATP_ENTERPRISE is Plan 1's - Plan 2 is a
+# superset, so either one presence means mailbox intelligence is licensed.
+$script:AntiPhishingMailboxIntelligenceServicePlans = @('ATP_ENTERPRISE', 'THREAT_INTELLIGENCE')
+
+function Get-ExchangeOnline-AntiPhishingMailboxIntelligenceState {
+    <#
+    .SYNOPSIS
+        Reads the default anti-phishing policy's mailbox intelligence settings.
+    .DESCRIPTION
+        Mailbox intelligence and mailbox-intelligence-based impersonation
+        protection are Defender for Office 365 Plan 1+ features - NOT included
+        on Exchange Online Plan 1/2 alone or Microsoft 365 Business Basic/
+        Standard, unlike spoof intelligence (see
+        ExchangeOnline-AntiPhishingSpoofIntelligence, which is base EOP and has
+        no gate). Gated on ATP_ENTERPRISE or THREAT_INTELLIGENCE via the shared
+        Test-TenantServicePlan helper (BaselineCore.psm1) - a control split out
+        specifically because the original combined ExchangeOnline-AntiPhishing
+        control's desiredValue wrongly assumed all three settings were
+        universally available. On a tenant without the license, reports
+        Value = $null ("Unknown", same convention as EntraID's audit-only
+        controls) rather than attempting a read the tenant's plan doesn't back.
+    .EXAMPLE
+        Get-ExchangeOnline-AntiPhishingMailboxIntelligenceState
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
+    if (-not (Test-TenantServicePlan -ServicePlanNames $script:AntiPhishingMailboxIntelligenceServicePlans)) {
+        return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishingMailboxIntelligence'; Value = $null; Detail = 'Tenant does not have Defender for Office 365 Plan 1 or 2 (ATP_ENTERPRISE/THREAT_INTELLIGENCE).' }
+    }
+    $policy = Get-AntiPhishPolicy -Identity (Get-BaselineDefaultAntiPhishPolicyIdentity) -ErrorAction Stop
+    $value = [pscustomobject]@{
+        enableMailboxIntelligence           = [bool]$policy.EnableMailboxIntelligence
+        enableMailboxIntelligenceProtection = [bool]$policy.EnableMailboxIntelligenceProtection
+    }
+    return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishingMailboxIntelligence'; Value = $value }
+}
+
+function Set-ExchangeOnline-AntiPhishingMailboxIntelligenceState {
+    <#
+    .SYNOPSIS
+        Idempotently enables mailbox intelligence and mailbox-intelligence-based
+        impersonation protection on the default anti-phishing policy.
+    .DESCRIPTION
+        Gated the same way as Get-ExchangeOnline-AntiPhishingMailboxIntelligenceState:
+        on a tenant without Defender for Office 365 Plan 1/2, reports
+        Skipped-LicenseInsufficient naming the missing service plans and never
+        calls Set-AntiPhishPolicy at all - the mailbox-intelligence parameters
+        are only ever passed to Set-AntiPhishPolicy once the gate has passed.
+    .PARAMETER DesiredValue
+        Object: { enableMailboxIntelligence: bool, enableMailboxIntelligenceProtection: bool }.
+    .PARAMETER CurrentValue
+        Optional pre-fetched current value.
+    .EXAMPLE
+        Set-ExchangeOnline-AntiPhishingMailboxIntelligenceState -DesiredValue ([pscustomobject]@{enableMailboxIntelligence=$true;enableMailboxIntelligenceProtection=$true})
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$DesiredValue,
+
+        [Parameter()]
+        [AllowNull()]
+        [object]$CurrentValue
+    )
+    if (-not (Test-TenantServicePlan -ServicePlanNames $script:AntiPhishingMailboxIntelligenceServicePlans)) {
+        $message = 'Tenant is missing the required service plan(s): ATP_ENTERPRISE or THREAT_INTELLIGENCE (Defender for Office 365 Plan 1 or 2). Mailbox intelligence was not changed.'
+        return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishingMailboxIntelligence'; Status = 'Skipped-LicenseInsufficient'; PreviousValue = $CurrentValue; AppliedValue = $null; Message = $message }
+    }
+    $current = if ($null -ne $CurrentValue) { $CurrentValue } else { (Get-ExchangeOnline-AntiPhishingMailboxIntelligenceState).Value }
+    if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
+        return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishingMailboxIntelligence'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
     Set-AntiPhishPolicy -Identity (Get-BaselineDefaultAntiPhishPolicyIdentity) `
-        -EnableSpoofIntelligence:([bool]$DesiredValue.spoofIntelligence) `
-        -EnableMailboxIntelligence:([bool]$DesiredValue.mailboxIntelligence) `
-        -EnableMailboxIntelligenceProtection:([bool]$DesiredValue.mailboxIntelligenceProtection) `
+        -EnableMailboxIntelligence:([bool]$DesiredValue.enableMailboxIntelligence) `
+        -EnableMailboxIntelligenceProtection:([bool]$DesiredValue.enableMailboxIntelligenceProtection) `
         -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishing'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated AntiPhishPolicy Default.' }
+    return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishingMailboxIntelligence'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated AntiPhishPolicy Default EnableMailboxIntelligence/EnableMailboxIntelligenceProtection.' }
 }
 
 # ---------------------------------------------------------------------------
@@ -502,7 +585,8 @@ function Set-ExchangeOnline-DkimSigningState {
 Export-ModuleMember -Function @(
     'Get-ExchangeOnline-MailboxAuditingDefaultState', 'Set-ExchangeOnline-MailboxAuditingDefaultState'
     'Get-ExchangeOnline-AntiSpamInboundState', 'Set-ExchangeOnline-AntiSpamInboundState'
-    'Get-ExchangeOnline-AntiPhishingState', 'Set-ExchangeOnline-AntiPhishingState'
+    'Get-ExchangeOnline-AntiPhishingSpoofIntelligenceState', 'Set-ExchangeOnline-AntiPhishingSpoofIntelligenceState'
+    'Get-ExchangeOnline-AntiPhishingMailboxIntelligenceState', 'Set-ExchangeOnline-AntiPhishingMailboxIntelligenceState'
     'Get-ExchangeOnline-AntiMalwareAttachmentFilterState', 'Set-ExchangeOnline-AntiMalwareAttachmentFilterState'
     'Get-ExchangeOnline-ExternalSenderTagState', 'Set-ExchangeOnline-ExternalSenderTagState'
     'Get-ExchangeOnline-DisableAutoForwardingState', 'Set-ExchangeOnline-DisableAutoForwardingState'

@@ -38,12 +38,26 @@ $script:WorkloadModuleMap = [ordered]@{
     SharePointOnline = 'Microsoft.Online.SharePoint.PowerShell'
 }
 
-# Narrowest Graph delegated scopes that cover the EntraID controls in this toolkit.
+# Narrowest Graph delegated scopes that cover the EntraID controls in this toolkit,
+# plus what's needed for license-gated controls (Organization.Read.All, for
+# Test-TenantServicePlan/Get-MgSubscribedSku) and the Conditional Access module
+# (Policy.ReadWrite.ConditionalAccess, Group.ReadWrite.All for the emergency-access
+# group, Application.Read.All to resolve the Azure Management service principal).
+# Requested unconditionally rather than computed per-run from which controls are
+# enabled: granting a scope costs nothing on a tenant that can't use the feature
+# behind it (e.g. Policy.ReadWrite.ConditionalAccess consents fine on Entra ID Free,
+# it's ACTUALLY reading/writing a CA policy that the license gate in
+# ConditionalAccessControls.psm1 prevents on Free) and keeps the connection logic
+# simple - only the license gate decides what actually happens, never the scope list.
 $script:GraphScopes = @(
     'Policy.ReadWrite.Authorization'
     'Policy.ReadWrite.AuthenticationMethod'
     'Directory.Read.All'
     'RoleManagement.Read.Directory'
+    'Organization.Read.All'
+    'Policy.ReadWrite.ConditionalAccess'
+    'Group.ReadWrite.All'
+    'Application.Read.All'
 )
 
 # A control's "workload" label in the config is the audit grouping used in reports.
@@ -57,11 +71,22 @@ $script:ControlConnectionOverrides = @{
     'EntraID-UnifiedAuditLog' = 'ExchangeOnline'
 }
 
+# Controls whose primary Connection (above) isn't the only one they need. Currently
+# just ExchangeOnline-AntiPhishingMailboxIntelligence: its actual Set-AntiPhishPolicy
+# call is Exchange-only, but it also has to call Test-TenantServicePlan (Graph) to
+# check for Defender for Office 365 licensing before doing anything. Every
+# Conditional Access control's primary Connection is already 'Graph', so none of
+# them need an entry here despite also calling Test-TenantServicePlan.
+$script:ControlExtraConnections = @{
+    'ExchangeOnline-AntiPhishingMailboxIntelligence' = @('Graph')
+}
+
 $script:WorkloadToConnectionDefault = @{
-    EntraID          = 'Graph'
-    ExchangeOnline   = 'ExchangeOnline'
-    Teams            = 'Teams'
-    SharePointOnline = 'SharePointOnline'
+    EntraID           = 'Graph'
+    ExchangeOnline    = 'ExchangeOnline'
+    Teams             = 'Teams'
+    SharePointOnline  = 'SharePointOnline'
+    ConditionalAccess = 'Graph'
 }
 
 # Recognized Set- function result statuses.
@@ -244,6 +269,29 @@ function Get-BaselineControlConnection {
     throw "Control '$($Control.id)': unable to resolve a required connection for workload '$($Control.workload)'."
 }
 
+function Get-BaselineControlExtraConnections {
+    <#
+    .SYNOPSIS
+        Resolves any *additional* backend connections a control needs beyond its
+        primary Get-BaselineControlConnection result (e.g. a control whose actual
+        Set- call is Exchange-only but also needs Graph for a license check).
+    .PARAMETER Control
+        A single control entry from the parsed config.
+    .EXAMPLE
+        Get-BaselineControlExtraConnections -Control $control
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Control
+    )
+    if ($script:ControlExtraConnections.ContainsKey($Control.id)) {
+        return ,[string[]]$script:ControlExtraConnections[$Control.id]
+    }
+    return ,[string[]]@()
+}
+
 # ---------------------------------------------------------------------------
 # Control catalog
 # ---------------------------------------------------------------------------
@@ -285,7 +333,7 @@ function Get-BaselineControlCatalog {
         # otherwise get misidentified as orphaned catalog controls once that module is
         # loaded (it stays loaded across separate runs of this script in the same
         # PowerShell window when -KeepConnectionsOpen was used on a prior run).
-        $ourModuleNames = @('EntraIdControls', 'ExchangeOnlineControls', 'TeamsControls', 'SharePointOnlineControls')
+        $ourModuleNames = @('EntraIdControls', 'ExchangeOnlineControls', 'TeamsControls', 'SharePointOnlineControls', 'ConditionalAccessControls')
         $AvailableFunctions = (Get-Command -CommandType Function | Where-Object { $_.Name -match '^(Get|Set)-.+State$' -and $_.ModuleName -in $ourModuleNames }).Name
     }
 
@@ -312,12 +360,15 @@ function Get-BaselineControlCatalog {
                 Id           = $control.id
                 Workload     = $control.workload
                 Connection   = Get-BaselineControlConnection -Control $control
+                ExtraConnections = Get-BaselineControlExtraConnections -Control $control
                 Automatable  = [bool]$control.automatable
                 DesiredValue = $control.desiredValue
                 Description  = $control.description
                 ComplianceMode = if ($control.PSObject.Properties['complianceMode']) { [string]$control.complianceMode } else { 'Equality' }
                 ManualInstructions = if ($control.PSObject.Properties['manualInstructions']) { [string]$control.manualInstructions } else { '' }
                 RequiresPopulatedFields = @(if ($control.PSObject.Properties['requiresPopulatedFields']) { $control.requiresPopulatedFields } else { @() })
+                Tier         = if ($control.PSObject.Properties['tier']) { [Nullable[int]][int]$control.tier } else { $null }
+                ForceCreateDespiteOverlap = if ($control.PSObject.Properties['forceCreateDespiteOverlap']) { [bool]$control.forceCreateDespiteOverlap } else { $false }
                 GetCommand   = $getName
                 SetCommand   = $setName
             })
@@ -494,6 +545,98 @@ function Test-BaselineCompliance {
     }
 
     return Compare-BaselineValueDeep -Left $CurrentValue -Right $DesiredValue
+}
+
+# ---------------------------------------------------------------------------
+# Licensing
+# ---------------------------------------------------------------------------
+
+# Module-scoped, not session-global: Invoke-M365Baseline.ps1 re-imports this module
+# with -Force on every run, which resets this back to $null, so a stale license
+# read from an earlier run in the same PowerShell window can never leak into a
+# later one. Within a single run it's populated once and reused by every caller.
+$script:SubscribedSkuCache = $null
+
+function Get-BaselineSubscribedSkuCache {
+    <#
+    .SYNOPSIS
+        Internal: returns this run's cached Get-MgSubscribedSku result, calling it
+        only on first use (or when -Refresh is passed) and reusing the result for
+        every subsequent license check in the same run.
+    .DESCRIPTION
+        Backs Test-TenantServicePlan. Both Conditional Access license gating and
+        ExchangeOnline-AntiPhishingMailboxIntelligence's Defender for Office 365
+        gate call Test-TenantServicePlan, potentially many times across many
+        controls in one run - this cache is what keeps Get-MgSubscribedSku itself
+        to at most one real call per run.
+    .PARAMETER Refresh
+        Forces a fresh Get-MgSubscribedSku call even if a cached result exists.
+        Not used by Test-TenantServicePlan itself; available for callers (e.g.
+        tests) that need to invalidate the cache mid-run.
+    .EXAMPLE
+        Get-BaselineSubscribedSkuCache
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter()]
+        [switch]$Refresh
+    )
+    if ($Refresh -or $null -eq $script:SubscribedSkuCache) {
+        $script:SubscribedSkuCache = @(Get-MgSubscribedSku -All -ErrorAction Stop)
+    }
+    return ,$script:SubscribedSkuCache
+}
+
+function Test-TenantServicePlan {
+    <#
+    .SYNOPSIS
+        Checks whether the tenant holds at least one of the given Microsoft Graph
+        service plan names, in an active provisioning state, across all of its
+        subscribed SKUs.
+    .DESCRIPTION
+        Shared license-gate infrastructure - the only code path in this toolkit
+        that calls Get-MgSubscribedSku (via Get-BaselineSubscribedSkuCache, which
+        caches the result for the rest of the run). Used by both
+        ConditionalAccessControls.psm1 (Entra ID P1/P2 gating) and
+        ExchangeOnline-AntiPhishingMailboxIntelligence (Defender for Office 365
+        Plan 1/2 gating) - any future license-gated control should reuse this
+        rather than calling Get-MgSubscribedSku directly.
+
+        A service plan name is matched against every subscribed SKU's ServicePlans
+        collection, not just one specific SKU, since the same service plan (e.g.
+        AAD_PREMIUM) can be granted by more than one SKU. "Active" means any
+        provisioning status other than 'Disabled': an admin can disable one
+        service plan within an otherwise-active SKU without removing the SKU
+        itself, but 'PendingActivation'/'PendingInput'/'PendingProvisioning' all
+        still mean the plan is granted (just not fully rolled out yet), not absent.
+
+        Requires a Microsoft Graph connection with at least Organization.Read.All.
+    .PARAMETER ServicePlanNames
+        One or more Graph service plan names (e.g. 'AAD_PREMIUM'). Returns $true
+        if ANY of them is present and active - callers that need "either of these
+        two plans satisfies the gate" (e.g. ATP_ENTERPRISE or THREAT_INTELLIGENCE
+        for Defender for Office 365 Plan 1 or 2) pass both in one call.
+    .EXAMPLE
+        Test-TenantServicePlan -ServicePlanNames @('AAD_PREMIUM')
+    .EXAMPLE
+        Test-TenantServicePlan -ServicePlanNames @('ATP_ENTERPRISE','THREAT_INTELLIGENCE')
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$ServicePlanNames
+    )
+    $skus = Get-BaselineSubscribedSkuCache
+    foreach ($sku in $skus) {
+        foreach ($plan in @($sku.ServicePlans)) {
+            if (($ServicePlanNames -contains $plan.ServicePlanName) -and ([string]$plan.ProvisioningStatus -ne 'Disabled')) {
+                return $true
+            }
+        }
+    }
+    return $false
 }
 
 # ---------------------------------------------------------------------------
@@ -1040,6 +1183,18 @@ function Invoke-BaselineControlApply {
             if ($setCmd.Parameters.ContainsKey('AcknowledgeRisk')) {
                 $setParams['AcknowledgeRisk'] = [bool]$AcknowledgeRisk
             }
+            # PSObject.Properties[...] checks (not just .Tier/.ForceCreateDespiteOverlap
+            # direct access) because catalog entries built by hand rather than via
+            # Get-BaselineControlCatalog (e.g. Orchestrator.Tests.ps1's fake catalogs)
+            # may not have these properties at all, and this module runs under
+            # Set-StrictMode -Version Latest - referencing a genuinely absent property
+            # throws rather than returning $null.
+            if ($setCmd.Parameters.ContainsKey('Tier') -and $entry.PSObject.Properties['Tier'] -and $null -ne $entry.Tier) {
+                $setParams['Tier'] = $entry.Tier
+            }
+            if ($setCmd.Parameters.ContainsKey('ForceCreateDespiteOverlap')) {
+                $setParams['ForceCreateDespiteOverlap'] = if ($entry.PSObject.Properties['ForceCreateDespiteOverlap']) { [bool]$entry.ForceCreateDespiteOverlap } else { $false }
+            }
             $setResult = & $entry.SetCommand @setParams
 
             $logRecord.result = $setResult.Status
@@ -1545,7 +1700,10 @@ Export-ModuleMember -Function @(
     'Import-BaselineConfig'
     'Test-BaselineConfigSemantics'
     'Get-BaselineControlConnection'
+    'Get-BaselineControlExtraConnections'
     'Get-BaselineControlCatalog'
+    'Get-BaselineSubscribedSkuCache'
+    'Test-TenantServicePlan'
     'Compare-BaselineValueDeep'
     'Get-BaselinePropertyMap'
     'Test-BaselineCompliance'
