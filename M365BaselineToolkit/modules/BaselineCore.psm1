@@ -278,7 +278,15 @@ function Get-BaselineControlCatalog {
     )
 
     if (-not $AvailableFunctions) {
-        $AvailableFunctions = (Get-Command -CommandType Function | Where-Object { $_.Name -match '^(Get|Set)-.+State$' }).Name
+        # Scoped to our own four control modules by name, not just the Get-/Set-*State
+        # naming pattern: some vendor modules ship real cmdlets that happen to match
+        # it too - e.g. Microsoft.Online.SharePoint.PowerShell's genuine
+        # Get-/Set-SPOStructuralNavigationCacheSiteState and ...CacheWebState, which
+        # otherwise get misidentified as orphaned catalog controls once that module is
+        # loaded (it stays loaded across separate runs of this script in the same
+        # PowerShell window when -KeepConnectionsOpen was used on a prior run).
+        $ourModuleNames = @('EntraIdControls', 'ExchangeOnlineControls', 'TeamsControls', 'SharePointOnlineControls')
+        $AvailableFunctions = (Get-Command -CommandType Function | Where-Object { $_.Name -match '^(Get|Set)-.+State$' -and $_.ModuleName -in $ourModuleNames }).Name
     }
 
     $errors = [System.Collections.Generic.List[string]]::new()
