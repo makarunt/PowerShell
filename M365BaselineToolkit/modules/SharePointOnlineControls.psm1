@@ -147,6 +147,16 @@ function Set-SharePointOnline-DefaultLinkPermissionState {
     if ($current -eq $DesiredValue) {
         return [pscustomobject]@{ Id = 'SharePointOnline-DefaultLinkPermission'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
+    # 'None' is a value Get-SPOTenant can report (SharePoint's own never-configured
+    # default - e.g. what a Restore snapshot captured before this control was ever
+    # applied) but Set-SPOTenant -DefaultLinkPermission rejects as input; it only
+    # accepts 'View' or 'Edit'. There's no supported way to programmatically revert
+    # to 'None' once a value has been set, so fail with a clear reason up front
+    # instead of letting Set-SPOTenant's own opaque validation error surface.
+    if ($DesiredValue -notin @('View', 'Edit')) {
+        $message = "Cannot set DefaultLinkPermission to '$DesiredValue' - Set-SPOTenant only accepts 'View' or 'Edit'. '$DesiredValue' is SharePoint's own unconfigured default and cannot be restored via PowerShell; change it manually in the SharePoint admin center if you need this reverted."
+        return [pscustomobject]@{ Id = 'SharePointOnline-DefaultLinkPermission'; Status = 'Failed'; PreviousValue = $current; AppliedValue = $null; Message = $message }
+    }
     Set-SPOTenant -DefaultLinkPermission $DesiredValue -ErrorAction Stop
     return [pscustomobject]@{ Id = 'SharePointOnline-DefaultLinkPermission'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated DefaultLinkPermission.' }
 }
@@ -193,6 +203,16 @@ function Set-SharePointOnline-AnonymousLinkExpirationState {
     $current = if ($null -ne $CurrentValue) { [int]$CurrentValue } else { (Get-SharePointOnline-AnonymousLinkExpirationState).Value }
     if ($current -eq $DesiredValue) {
         return [pscustomobject]@{ Id = 'SharePointOnline-AnonymousLinkExpiration'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+    }
+    # -1 is a value Get-SPOTenant can report (SharePoint's own never-configured
+    # default, meaning anonymous links never expire - e.g. what a Restore snapshot
+    # captured before this control was ever applied) but Set-SPOTenant rejects as
+    # input; it only accepts 1-730. There's no supported way to programmatically
+    # revert to -1 once a value has been set, so fail with a clear reason up front
+    # instead of letting Set-SPOTenant's own opaque validation error surface.
+    if ($DesiredValue -lt 1 -or $DesiredValue -gt 730) {
+        $message = "Cannot set RequireAnonymousLinksExpireInDays to $DesiredValue - Set-SPOTenant only accepts values from 1 to 730. $DesiredValue is SharePoint's own unconfigured default (never expire) and cannot be restored via PowerShell; change it manually in the SharePoint admin center if you need this reverted."
+        return [pscustomobject]@{ Id = 'SharePointOnline-AnonymousLinkExpiration'; Status = 'Failed'; PreviousValue = $current; AppliedValue = $null; Message = $message }
     }
     Set-SPOTenant -RequireAnonymousLinksExpireInDays $DesiredValue -ErrorAction Stop
     return [pscustomobject]@{ Id = 'SharePointOnline-AnonymousLinkExpiration'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated RequireAnonymousLinksExpireInDays.' }
