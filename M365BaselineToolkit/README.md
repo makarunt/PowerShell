@@ -362,9 +362,11 @@ name).
   - `Connect-ExchangeOnline` fails with a `NullReferenceException` inside
     `Microsoft.Identity.Client...RuntimeBroker` — happens when Exchange
     Online connects *second*, after Graph has already initialized MSAL's WAM
-    broker. Fixed by passing `-DisableWAM` to `Connect-ExchangeOnline`
-    (`ExchangeOnlineManagement` 3.7+), which the toolkit does automatically
-    when your installed module version supports that switch.
+    broker. The toolkit connects normally first and only retries with
+    `-DisableWAM` (`ExchangeOnlineManagement` 3.7+, if your installed module
+    version supports that switch) if this specific crash actually occurs —
+    `-DisableWAM` is a strictly worse fallback otherwise, so it's never
+    forced on unconditionally.
 
   If you still hit either error after pulling the latest version of this
   toolkit, it's almost always duplicate/stale module versions left behind by

@@ -731,13 +731,16 @@ function Connect-BaselineWorkload {
                 # Microsoft.Graph) has already used MSAL earlier in the same process - see
                 # https://github.com/microsoftgraph/msgraph-sdk-powershell/issues/3576.
                 # -DisableWAM avoids that crash by falling back to the older, broker-free
-                # interactive browser flow, BUT that flow issues a token that at least one
-                # beta REST-backed cmdlet (Get-ExternalInOutlook, used by the
-                # ExchangeOnline-ExternalSenderTag control) has been observed to reject
-                # with an HTTP 403 - the WAM-issued token is accepted by that same
-                # endpoint. So -DisableWAM must not be forced unconditionally: attempt the
-                # normal WAM connection first, and fall back to -DisableWAM only if that
+                # interactive browser flow. It should not be forced unconditionally though,
+                # since it's a strictly worse flow when WAM isn't actually failing: attempt
+                # the normal WAM connection first, and fall back to -DisableWAM only if that
                 # specific RuntimeBroker crash actually happens.
+                #
+                # (An earlier version of this comment blamed -DisableWAM for HTTP 403s on
+                # Get-ExternalInOutlook/ExchangeOnline-ExternalSenderTag. That was wrong -
+                # the real cause was unrelated, in how that control called
+                # Get-ExternalInOutlook; see Get-ExchangeOnline-ExternalSenderTagState in
+                # ExchangeOnlineControls.psm1 for the actual root cause and fix.)
                 $eopParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
                 $supportsDisableWam = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')
                 try {
@@ -750,7 +753,7 @@ function Connect-BaselineWorkload {
                          $_.ToString() -match 'RuntimeBroker')
                     if (-not $isWamBrokerCrash) { throw }
 
-                    Write-Warning "Connect-ExchangeOnline failed with what looks like the known WAM/RuntimeBroker crash; retrying with -DisableWAM. Note: this fallback path is known to cause 403s on Get-ExternalInOutlook (ExchangeOnline-ExternalSenderTag) - see BaselineCore.psm1 comments."
+                    Write-Warning "Connect-ExchangeOnline failed with what looks like the known WAM/RuntimeBroker crash; retrying with -DisableWAM."
                     $eopParams['DisableWAM'] = $true
                     Connect-ExchangeOnline @eopParams
                 }

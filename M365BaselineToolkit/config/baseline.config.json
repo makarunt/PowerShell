@@ -98,7 +98,7 @@
       "enabled": true,
       "automatable": true,
       "desiredValue": true,
-      "description": "Outlook tags messages from external senders so users can spot them at a glance. Read first among ExchangeOnline-* controls on purpose - see EntraIdControls/ExchangeOnlineControls modules and README for why."
+      "description": "Outlook tags messages from external senders so users can spot them at a glance."
     },
     {
       "id": "ExchangeOnline-MailboxAuditingDefault",
