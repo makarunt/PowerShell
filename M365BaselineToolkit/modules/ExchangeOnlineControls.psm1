@@ -248,26 +248,37 @@ function Get-ExchangeOnline-ExternalSenderTagState {
     .SYNOPSIS
         Reads whether Outlook tags external-sender messages.
     .DESCRIPTION
-        Get-ExternalInOutlook has been observed writing a non-terminating error
-        even on an otherwise-successful call in some tenants - harmless when run
-        interactively under PowerShell's default error handling, but this
-        toolkit runs with $ErrorActionPreference = 'Stop' globally, which
-        promotes that into a terminating failure before the cmdlet can return
-        its real result. -ErrorAction SilentlyContinue overrides that for just
-        this call so it can finish normally; a genuine failure still surfaces
-        below, since $cfg would then be empty.
+        Confirmed via a live tenant's exception stack trace: Get-ExternalInOutlook
+        has its own internal retry logic (Execute-Command -> CheckRetryAndHandleWaitTime)
+        that calls Write-Error as part of a retry step, and the same call has been
+        observed succeeding immediately when run interactively moments later - this
+        is intermittent backend flakiness in that specific cmdlet (Microsoft's own
+        error text says as much: "Please try again after some time"), not something
+        fully solvable with error-handling alone. -ErrorAction SilentlyContinue on
+        the call itself (proven more reliable than overriding the
+        $ErrorActionPreference variable, which does not reliably cross the module
+        boundary into Get-ExternalInOutlook's own internal helper functions) keeps a
+        mid-retry Write-Error from aborting this call under the toolkit's global
+        $ErrorActionPreference = 'Stop'; on top of that, this function retries the
+        whole call up to 3 times with a short delay, since a single attempt can
+        still land during a transient backend hiccup.
     .EXAMPLE
         Get-ExchangeOnline-ExternalSenderTagState
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param()
-    $cfg = Get-ExternalInOutlook -ErrorAction SilentlyContinue -ErrorVariable getError
-    if (-not $cfg) {
-        $detail = if ($getError) { $getError[0].Exception.Message } else { 'no result returned' }
-        throw "Get-ExternalInOutlook failed: $detail"
+    $maxAttempts = 3
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $cfg = Get-ExternalInOutlook -ErrorAction SilentlyContinue -ErrorVariable getError
+        if ($cfg) {
+            return [pscustomobject]@{ Id = 'ExchangeOnline-ExternalSenderTag'; Value = [bool]$cfg.Enabled }
+        }
+        $lastError = if ($getError) { $getError[0].Exception.Message } else { 'no result returned' }
+        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
     }
-    return [pscustomobject]@{ Id = 'ExchangeOnline-ExternalSenderTag'; Value = [bool]$cfg.Enabled }
+    throw "Get-ExternalInOutlook failed after $maxAttempts attempt(s): $lastError"
 }
 
 function Set-ExchangeOnline-ExternalSenderTagState {
