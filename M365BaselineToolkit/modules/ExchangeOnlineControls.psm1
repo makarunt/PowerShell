@@ -275,7 +275,11 @@ function Get-ExchangeOnline-ExternalSenderTagState {
         if ($cfg) {
             return [pscustomobject]@{ Id = 'ExchangeOnline-ExternalSenderTag'; Value = [bool]$cfg.Enabled }
         }
-        $lastError = if ($getError) { $getError[0].Exception.Message } else { 'no result returned' }
+        # Plain string conversion rather than .Exception.Message: whatever lands in
+        # $getError[0] (a normal ErrorRecord most of the time) always has a sane
+        # ToString(), so this can't itself throw under StrictMode the way a property
+        # chain that assumes one specific object shape can.
+        $lastError = if ($getError -and $getError.Count -gt 0) { [string]$getError[0] } else { 'no result returned' }
         if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
     }
     throw "Get-ExternalInOutlook failed after $maxAttempts attempt(s): $lastError"
