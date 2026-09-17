@@ -9,6 +9,27 @@
 
 Set-StrictMode -Version Latest
 
+function Get-BaselineDefaultAntiPhishPolicyIdentity {
+    <#
+    .SYNOPSIS
+        Resolves the Identity of the tenant's built-in default anti-phish policy.
+    .DESCRIPTION
+        The built-in policy is conventionally named "Office365 AntiPhish Default",
+        not "Default" - Get-AntiPhishPolicy -Identity Default does not resolve it.
+        Looks the policy up by its IsDefault flag instead of hardcoding that name,
+        in case it's ever renamed, falling back to the documented name if the flag
+        isn't present on an older module version.
+    .EXAMPLE
+        Get-BaselineDefaultAntiPhishPolicyIdentity
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    $default = Get-AntiPhishPolicy -ErrorAction Stop | Where-Object { $_.IsDefault } | Select-Object -First 1
+    if ($default) { return $default.Identity }
+    return 'Office365 AntiPhish Default'
+}
+
 # ---------------------------------------------------------------------------
 # ExchangeOnline-MailboxAuditingDefault
 # ---------------------------------------------------------------------------
@@ -128,7 +149,7 @@ function Get-ExchangeOnline-AntiPhishingState {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param()
-    $policy = Get-AntiPhishPolicy -Identity Default -ErrorAction Stop
+    $policy = Get-AntiPhishPolicy -Identity (Get-BaselineDefaultAntiPhishPolicyIdentity) -ErrorAction Stop
     $value = [pscustomobject]@{
         spoofIntelligence             = [bool]$policy.EnableSpoofIntelligence
         mailboxIntelligence           = [bool]$policy.EnableMailboxIntelligence
@@ -162,7 +183,7 @@ function Set-ExchangeOnline-AntiPhishingState {
     if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
         return [pscustomobject]@{ Id = 'ExchangeOnline-AntiPhishing'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    Set-AntiPhishPolicy -Identity Default `
+    Set-AntiPhishPolicy -Identity (Get-BaselineDefaultAntiPhishPolicyIdentity) `
         -EnableSpoofIntelligence:([bool]$DesiredValue.spoofIntelligence) `
         -EnableMailboxIntelligence:([bool]$DesiredValue.mailboxIntelligence) `
         -EnableMailboxIntelligenceProtection:([bool]$DesiredValue.mailboxIntelligenceProtection) `

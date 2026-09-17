@@ -68,6 +68,13 @@ trade-off here.
   (a background Windows PowerShell 5.1 compatibility process) — this is
   handled automatically; you don't need Windows PowerShell 5.1 open
   yourself, just present on the machine, which it is by default on Windows.
+  That import is also done with `-Global`: `-UseWindowsPowerShell` generates
+  local proxy functions for the remoted commands rather than exporting them
+  the normal way, and without `-Global` those proxies were only visible
+  inside the function that ran the import — not in the separate
+  `SharePointOnlineControls.psm1` module that actually calls `Get-SPOTenant`
+  and friends, which surfaced as `Get-SPOTenant is not recognized...` even
+  right after a successful `Connect-SPOService`.
 - One account with enough admin rights to touch every control below. Either
   **Global Administrator**, or this least-privileged combination:
   - **Exchange Administrator** — all `ExchangeOnline-*` controls and
@@ -293,7 +300,22 @@ parameter shape in this toolkit's `EntraIdControls.psm1` against the
 `Microsoft.Graph.Identity.SignIns` module version you have installed before
 relying on these two in production — a schema drift here would surface as an
 `Update-*` cmdlet error (a `Failed` result in Apply's output), not a silent
-no-op, but it's worth checking ahead of time.
+no-op, but it's worth checking ahead of time. Note that `EntraID-MfaRegistrationCampaign`'s
+`desiredValue.includeTargets` is required by the Graph API (the campaign has
+no effect with zero targets) — the seed config uses the documented
+`"all_users"` special group id to target everyone; replace it with a specific
+group id under `includeTargets` if you'd rather pilot with a subset first.
+
+Two other real-tenant findings worth knowing about, both already fixed in
+this toolkit's code but worth being aware of if you're extending it further:
+`Update-MgPolicyAuthorizationPolicy` (used by four EntraID controls) has no
+`-AuthorizationPolicyId`/Id parameter at all — `authorizationPolicy` is a
+singleton, so `-BodyParameter` alone is the only reliable call shape across
+SDK versions. And Exchange Online's built-in default anti-phish policy is
+actually named `"Office365 AntiPhish Default"`, not `"Default"` like the
+other default policies (`ExchangeOnline-AntiPhishing` now resolves it
+dynamically via each policy's `IsDefault` flag instead of hardcoding either
+name).
 
 ## If something goes wrong mid-run
 

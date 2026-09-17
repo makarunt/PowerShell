@@ -74,8 +74,14 @@
       "workload": "EntraID",
       "enabled": true,
       "automatable": true,
-      "desiredValue": { "state": "enabled", "snoozeDurationInDays": 1 },
-      "description": "Users who have not registered strong MFA methods are nudged to do so at sign-in, with a short snooze window."
+      "desiredValue": {
+        "state": "enabled",
+        "snoozeDurationInDays": 1,
+        "includeTargets": [
+          { "targetType": "group", "id": "all_users", "targetedAuthenticationMethod": "microsoftAuthenticator" }
+        ]
+      },
+      "description": "Users who have not registered strong MFA methods are nudged to do so at sign-in, with a short snooze window. Targets all users by default (Graph's documented 'all_users' special group id) - replace with a specific group id in includeTargets if you want to pilot with a subset first."
     },
     {
       "id": "EntraID-AdminPasswordResetNotification",

@@ -721,7 +721,15 @@ function Connect-BaselineWorkload {
                 # isolated background Windows PowerShell 5.1 process via implicit
                 # remoting - the documented workaround for this module on PS7+ - which
                 # also sidesteps any broker state left over from the other connections.
-                Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -ErrorAction Stop
+                # -Global is required here specifically: Import-Module normally adds a
+                # module's commands to the session for every caller regardless of scope,
+                # but -UseWindowsPowerShell instead dynamically generates local proxy
+                # functions for the implicitly-remoted commands, and without -Global
+                # those proxies are only visible inside this function's own scope - the
+                # control functions in SharePointOnlineControls.psm1 (a sibling module)
+                # would otherwise see "Get-SPOTenant is not recognized" even though this
+                # Connect-SPOService call two lines down succeeds.
+                Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -Global -ErrorAction Stop
                 Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
             }
         }

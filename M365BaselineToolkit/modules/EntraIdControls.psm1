@@ -170,8 +170,11 @@ function Set-EntraID-GuestInviteRestrictionState {
     if ($current -eq $DesiredValue) {
         return [pscustomobject]@{ Id = 'EntraID-GuestInviteRestriction'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    $policy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
-    Update-MgPolicyAuthorizationPolicy -AuthorizationPolicyId $policy.Id -AllowInvitesFrom $DesiredValue -ErrorAction Stop
+    # authorizationPolicy is a singleton resource (fixed path, no id in the URL), so
+    # Update-MgPolicyAuthorizationPolicy takes no Id parameter at all - only
+    # -BodyParameter is reliable across SDK versions (some versions also expose
+    # -AllowInvitesFrom directly, but it isn't present in every installed version).
+    Update-MgPolicyAuthorizationPolicy -BodyParameter @{ allowInvitesFrom = $DesiredValue } -ErrorAction Stop
     return [pscustomobject]@{ Id = 'EntraID-GuestInviteRestriction'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated AllowInvitesFrom.' }
 }
 
@@ -218,8 +221,9 @@ function Set-EntraID-GuestUserRoleRestrictionState {
     if ($current -eq $DesiredValue) {
         return [pscustomobject]@{ Id = 'EntraID-GuestUserRoleRestriction'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    $policy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
-    Update-MgPolicyAuthorizationPolicy -AuthorizationPolicyId $policy.Id -GuestUserRoleId $DesiredValue -ErrorAction Stop
+    # See EntraID-GuestInviteRestriction's Set- function: authorizationPolicy is a
+    # singleton, so no Id parameter exists on Update-MgPolicyAuthorizationPolicy.
+    Update-MgPolicyAuthorizationPolicy -BodyParameter @{ guestUserRoleId = $DesiredValue } -ErrorAction Stop
     return [pscustomobject]@{ Id = 'EntraID-GuestUserRoleRestriction'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated GuestUserRoleId.' }
 }
 
@@ -267,9 +271,8 @@ function Set-EntraID-BlockUserConsentToAppsState {
     if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
         return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    $policy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
     $body = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @($DesiredValue.permissionGrantPoliciesAssigned) } }
-    Update-MgPolicyAuthorizationPolicy -AuthorizationPolicyId $policy.Id -BodyParameter $body -ErrorAction Stop
+    Update-MgPolicyAuthorizationPolicy -BodyParameter $body -ErrorAction Stop
     return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated DefaultUserRolePermissions.PermissionGrantPoliciesAssigned.' }
 }
 
@@ -320,14 +323,13 @@ function Set-EntraID-BlockSelfServiceAppCreationState {
     if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
         return [pscustomobject]@{ Id = 'EntraID-BlockSelfServiceAppCreation'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    $policy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
     $body = @{
         defaultUserRolePermissions = @{
             allowedToCreateApps    = [bool]$DesiredValue.allowedToCreateApps
             allowedToCreateTenants = [bool]$DesiredValue.allowedToCreateTenants
         }
     }
-    Update-MgPolicyAuthorizationPolicy -AuthorizationPolicyId $policy.Id -BodyParameter $body -ErrorAction Stop
+    Update-MgPolicyAuthorizationPolicy -BodyParameter $body -ErrorAction Stop
     return [pscustomobject]@{ Id = 'EntraID-BlockSelfServiceAppCreation'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated AllowedToCreateApps/AllowedToCreateTenants.' }
 }
 
@@ -467,9 +469,17 @@ function Get-EntraID-MfaRegistrationCampaignState {
     param()
     $policy = Get-MgPolicyAuthenticationMethodPolicy -ErrorAction Stop
     $campaign = $policy.RegistrationEnforcement.AuthenticationMethodsRegistrationCampaign
+    $includeTargets = @($campaign.IncludeTargets | ForEach-Object {
+        [pscustomobject]@{
+            targetType                  = [string]$_.TargetType
+            id                          = [string]$_.Id
+            targetedAuthenticationMethod = [string]$_.TargetedAuthenticationMethod
+        }
+    })
     $value = [pscustomobject]@{
         state                 = [string]$campaign.State
         snoozeDurationInDays  = [int]$campaign.SnoozeDurationInDays
+        includeTargets        = $includeTargets
     }
     return [pscustomobject]@{ Id = 'EntraID-MfaRegistrationCampaign'; Value = $value }
 }
@@ -479,11 +489,15 @@ function Set-EntraID-MfaRegistrationCampaignState {
     .SYNOPSIS
         Idempotently sets the MFA registration campaign state and snooze duration.
     .PARAMETER DesiredValue
-        Object: { state: 'enabled'|'disabled', snoozeDurationInDays: int }.
+        Object: { state: 'enabled'|'disabled', snoozeDurationInDays: int,
+        includeTargets: [ { targetType, id, targetedAuthenticationMethod } ] }.
+        includeTargets is required by the Graph API - the campaign has no effect
+        without at least one target; the seed config uses the documented
+        "all_users" special group id to target the whole tenant.
     .PARAMETER CurrentValue
         Optional pre-fetched current value.
     .EXAMPLE
-        Set-EntraID-MfaRegistrationCampaignState -DesiredValue ([pscustomobject]@{state='enabled';snoozeDurationInDays=1})
+        Set-EntraID-MfaRegistrationCampaignState -DesiredValue ([pscustomobject]@{state='enabled';snoozeDurationInDays=1;includeTargets=@(@{targetType='group';id='all_users';targetedAuthenticationMethod='microsoftAuthenticator'})})
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -499,11 +513,22 @@ function Set-EntraID-MfaRegistrationCampaignState {
     if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
         return [pscustomobject]@{ Id = 'EntraID-MfaRegistrationCampaign'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
+    $includeTargets = @($DesiredValue.includeTargets | ForEach-Object {
+        @{
+            targetType                  = [string]$_.targetType
+            id                          = [string]$_.id
+            targetedAuthenticationMethod = [string]$_.targetedAuthenticationMethod
+        }
+    })
+    if ($includeTargets.Count -eq 0) {
+        throw "EntraID-MfaRegistrationCampaign requires at least one entry in desiredValue.includeTargets (the Graph API rejects an empty target list); update config/baseline.config.json before running Apply."
+    }
     $body = @{
         registrationEnforcement = @{
             authenticationMethodsRegistrationCampaign = @{
                 state                = [string]$DesiredValue.state
                 snoozeDurationInDays = [int]$DesiredValue.snoozeDurationInDays
+                includeTargets       = $includeTargets
             }
         }
     }
