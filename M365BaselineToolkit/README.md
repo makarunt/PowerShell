@@ -62,7 +62,12 @@ trade-off here.
   edges (missing cmdlets, auth quirks) on non-Windows PowerShell — test on
   Windows before relying on this in production elsewhere. Nothing in this
   toolkit's own code is Windows-only; the constraint comes from those two
-  vendor modules.
+  vendor modules. `Microsoft.Online.SharePoint.PowerShell` specifically
+  targets .NET Framework rather than PowerShell 7's .NET runtime, so even
+  **on Windows** the toolkit loads it with `Import-Module -UseWindowsPowerShell`
+  (a background Windows PowerShell 5.1 compatibility process) — this is
+  handled automatically; you don't need Windows PowerShell 5.1 open
+  yourself, just present on the machine, which it is by default on Windows.
 - One account with enough admin rights to touch every control below. Either
   **Global Administrator**, or this least-privileged combination:
   - **Exchange Administrator** — all `ExchangeOnline-*` controls and

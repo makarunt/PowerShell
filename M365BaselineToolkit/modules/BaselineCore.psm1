@@ -645,7 +645,16 @@ function Connect-BaselineWorkload {
                 if ([string]::IsNullOrWhiteSpace($SharePointAdminUrl)) {
                     throw "SharePointOnline connection requires -SharePointAdminUrl (e.g. https://contoso-admin.sharepoint.com)."
                 }
-                Import-Module Microsoft.Online.SharePoint.PowerShell -ErrorAction Stop
+                # Microsoft.Online.SharePoint.PowerShell targets .NET Framework, not
+                # PowerShell 7's .NET runtime, and its own OAuth/broker handling is
+                # unreliable when loaded directly into a PS7 process that has already
+                # used MSAL for Graph/Exchange/Teams (surfaces as "No valid OAuth 2.0
+                # authentication session exists" from Connect-SPOService even with a
+                # correct URL and role). -UseWindowsPowerShell loads the module into an
+                # isolated background Windows PowerShell 5.1 process via implicit
+                # remoting - the documented workaround for this module on PS7+ - which
+                # also sidesteps any broker state left over from the other connections.
+                Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -ErrorAction Stop
                 Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
             }
         }
