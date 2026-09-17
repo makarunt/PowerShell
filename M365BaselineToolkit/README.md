@@ -277,6 +277,23 @@ no-op, but it's worth checking ahead of time.
   it couldn't connect to and a pointer to the roles section above; nothing
   is read or changed for any control until every required connection for
   that run succeeds.
+- **Graph connection fails with `Method not found: ...WithLogging...` (or any
+  other `MissingMethodException` from `InteractiveBrowserCredential`).** This
+  is a known conflict between `Microsoft.Graph` and `ExchangeOnlineManagement`:
+  both bundle their own copy of the MSAL auth library, and whichever module
+  connects first in the process "locks in" its version for the rest of the
+  session. The toolkit already connects to Graph before Exchange Online for
+  exactly this reason (see `Get-BaselineConnectionOrder` in
+  `BaselineCore.psm1`). If you still hit this, it's almost always duplicate/
+  stale module versions on disk — close **all** PowerShell windows, then run:
+  ```powershell
+  Get-InstalledModule Microsoft.Graph* | ForEach-Object {
+      Get-InstalledModule $_.Name -AllVersions |
+          Sort-Object Version -Descending | Select-Object -Skip 1 |
+          ForEach-Object { Uninstall-Module -Name $_.Name -RequiredVersion $_.Version -Force }
+  }
+  ```
+  to remove old duplicates, then open a fresh window and retry.
 
 ## Testing
 

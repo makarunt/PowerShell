@@ -23,6 +23,14 @@ $script:SupportedConfigSchemaVersion = '1.0'
 $script:SnapshotSchemaVersion = '1.0'
 
 # Maps a control's connection requirement to the PowerShell module that provides it.
+# Key order here is also the canonical CONNECTION order (see Get-BaselineConnectionOrder
+# below): Microsoft.Graph must connect before ExchangeOnlineManagement in the same
+# PowerShell process. Both modules bundle their own copy of MSAL (Microsoft.Identity.Client)
+# and, once one module's copy is loaded into the process, .NET keeps using that exact
+# version for the rest of the session - if Exchange Online's older bundled MSAL loads
+# first, Microsoft.Graph's later Connect-MgGraph call fails with a MissingMethodException
+# ("Method not found: ...WithLogging...") even though the account has every permission it
+# needs. Connecting to Graph first sidesteps this well-documented cross-module conflict.
 $script:WorkloadModuleMap = [ordered]@{
     Graph            = 'Microsoft.Graph'
     ExchangeOnline   = 'ExchangeOnlineManagement'
@@ -557,6 +565,34 @@ function Assert-BaselineRequiredModules {
             }
         }
     }
+}
+
+function Get-BaselineConnectionOrder {
+    <#
+    .SYNOPSIS
+        Orders a list of required connections into the sequence they should be
+        connected in.
+    .DESCRIPTION
+        Returns the subset of $script:WorkloadModuleMap's canonical key order
+        (Graph, ExchangeOnline, Teams, SharePointOnline) that appears in
+        -Connections. Graph must connect before ExchangeOnline in the same
+        process to avoid a known MSAL/Microsoft.Identity.Client assembly
+        version conflict between the Microsoft.Graph and ExchangeOnlineManagement
+        modules (see the comment on $script:WorkloadModuleMap) - callers should
+        always connect in this order rather than in config/catalog-encounter order.
+    .PARAMETER Connections
+        Connection names to order (any of 'Graph','ExchangeOnline','Teams','SharePointOnline').
+    .EXAMPLE
+        Get-BaselineConnectionOrder -Connections 'ExchangeOnline','Graph'
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Connections
+    )
+    $distinct = $Connections | Select-Object -Unique
+    return ,[string[]]($script:WorkloadModuleMap.Keys | Where-Object { $distinct -contains $_ })
 }
 
 function Connect-BaselineWorkload {
@@ -1344,6 +1380,7 @@ Export-ModuleMember -Function @(
     'Test-BaselineRequiredModule'
     'Install-BaselineRequiredModule'
     'Assert-BaselineRequiredModules'
+    'Get-BaselineConnectionOrder'
     'Connect-BaselineWorkload'
     'Disconnect-BaselineWorkload'
     'Invoke-BaselineControlAudit'

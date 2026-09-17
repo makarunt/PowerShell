@@ -142,7 +142,7 @@ try {
         }
     }
 
-    $requiredConnections = @($catalog | Select-Object -ExpandProperty Connection -Unique)
+    $requiredConnections = Get-BaselineConnectionOrder -Connections @($catalog | Select-Object -ExpandProperty Connection -Unique)
     if ($Mode -eq 'Restore') {
         # Restore only needs connections for controls present in the snapshot AND still
         # in the current catalog; resolved after the snapshot is loaded, below.
