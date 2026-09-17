@@ -726,17 +726,34 @@ function Connect-BaselineWorkload {
             'ExchangeOnline' {
                 Import-Module ExchangeOnlineManagement -ErrorAction Stop
                 # ExchangeOnlineManagement 3.7+ enables Windows Account Manager (WAM)
-                # sign-in by default, which is known to crash with a NullReferenceException
+                # sign-in by default. WAM occasionally crashes with a NullReferenceException
                 # in Microsoft.Identity.Client's RuntimeBroker when another module (e.g.
                 # Microsoft.Graph) has already used MSAL earlier in the same process - see
                 # https://github.com/microsoftgraph/msgraph-sdk-powershell/issues/3576.
-                # -DisableWAM falls back to the older, broker-free interactive browser flow.
-                # Passed only if the installed module version actually supports it.
+                # -DisableWAM avoids that crash by falling back to the older, broker-free
+                # interactive browser flow, BUT that flow issues a token that at least one
+                # beta REST-backed cmdlet (Get-ExternalInOutlook, used by the
+                # ExchangeOnline-ExternalSenderTag control) has been observed to reject
+                # with an HTTP 403 - the WAM-issued token is accepted by that same
+                # endpoint. So -DisableWAM must not be forced unconditionally: attempt the
+                # normal WAM connection first, and fall back to -DisableWAM only if that
+                # specific RuntimeBroker crash actually happens.
                 $eopParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
-                if ((Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')) {
-                    $eopParams['DisableWAM'] = $true
+                $supportsDisableWam = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')
+                try {
+                    Connect-ExchangeOnline @eopParams
                 }
-                Connect-ExchangeOnline @eopParams
+                catch {
+                    $isWamBrokerCrash = $supportsDisableWam -and
+                        ($_.Exception -is [System.NullReferenceException] -or
+                         $_.Exception.ToString() -match 'RuntimeBroker' -or
+                         $_.ToString() -match 'RuntimeBroker')
+                    if (-not $isWamBrokerCrash) { throw }
+
+                    Write-Warning "Connect-ExchangeOnline failed with what looks like the known WAM/RuntimeBroker crash; retrying with -DisableWAM. Note: this fallback path is known to cause 403s on Get-ExternalInOutlook (ExchangeOnline-ExternalSenderTag) - see BaselineCore.psm1 comments."
+                    $eopParams['DisableWAM'] = $true
+                    Connect-ExchangeOnline @eopParams
+                }
             }
             'Teams' {
                 Import-Module MicrosoftTeams -ErrorAction Stop
