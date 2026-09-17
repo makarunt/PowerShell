@@ -1086,6 +1086,21 @@ function Invoke-BaselineControlRestore {
             continue
         }
 
+        $snapHasError = $snap.PSObject.Properties['error'] -and $snap.error
+        if ($snapHasError -or $null -eq $snap.currentValue) {
+            $message = if ($snapHasError) {
+                "This snapshot never captured a valid value for this control (the audit that produced it failed to read it: $($snap.error)); nothing to restore it to."
+            }
+            else {
+                "This snapshot recorded a null/empty value for this control; nothing to restore it to."
+            }
+            $logRecord.result = 'Skipped-NoData'
+            $logRecord.errorMessage = $message
+            Write-BaselineChangeLogEntry -Path $ChangeLogPath -Entry $logRecord
+            $results.Add([pscustomobject]@{ Id = $entry.Id; Status = 'Skipped-NoData'; PreviousValue = $null; AppliedValue = $null; Message = $message })
+            continue
+        }
+
         $target = "$($entry.Id) ($($entry.Workload))"
         $action = "Restore recorded value from snapshot: $($snap.currentValue | ConvertTo-Json -Compress -Depth 10)"
         $shouldProceed = $true
