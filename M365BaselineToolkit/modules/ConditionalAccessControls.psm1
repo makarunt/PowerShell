@@ -753,8 +753,15 @@ function Get-CARequireMfaAzureManagementSpec {
         }
         OverlapPredicate = {
             param($Policy)
+            # Matches either an existing policy that specifically targets the Azure
+            # Management app, or one scoped to 'All' apps - a live-tenant check found
+            # an existing "all users, all apps, MFA" policy that structurally passed
+            # right by a narrower AppId-only check (Applications.IncludeApplications
+            # was confirmed as {All}, which trivially already covers Azure Management
+            # too), causing this control to create a genuinely redundant duplicate.
+            $includedApps = @($Policy.Conditions.Applications.IncludeApplications)
             (Test-BaselineCAGrantControlsMatch -Policy $Policy -ExpectedControls @('mfa')) -and
-                (@($Policy.Conditions.Applications.IncludeApplications) -contains $script:CAAzureManagementAppId)
+                (($includedApps -contains $script:CAAzureManagementAppId) -or ($includedApps -contains 'All'))
         }
         ComplianceCheck = {
             param($Policy)
@@ -921,10 +928,16 @@ function Get-CARequireMfaGuestAccessSpec {
         }
         OverlapPredicate = {
             param($Policy)
+            # Matches either an existing policy specifically scoped to guests, or one
+            # scoped to 'All' users - a live-tenant check found an existing "all users,
+            # all apps, MFA" policy that structurally passed right by a
+            # guests-only-condition check, since 'All' users trivially already includes
+            # guests, causing this control to create a genuinely redundant duplicate.
             $guestTypes = [string]$Policy.Conditions.Users.IncludeGuestsOrExternalUsers.GuestOrExternalUserTypes
             $legacyGuest = @($Policy.Conditions.Users.IncludeUsers) -contains 'GuestsOrExternalUsers'
+            $allUsers = @($Policy.Conditions.Users.IncludeUsers) -contains 'All'
             (Test-BaselineCAGrantControlsMatch -Policy $Policy -ExpectedControls @('mfa')) -and
-                ((-not [string]::IsNullOrWhiteSpace($guestTypes)) -or $legacyGuest)
+                ((-not [string]::IsNullOrWhiteSpace($guestTypes)) -or $legacyGuest -or $allUsers)
         }
         ComplianceCheck = {
             param($Policy)

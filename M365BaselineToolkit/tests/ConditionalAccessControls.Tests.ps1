@@ -189,6 +189,49 @@ Describe 'ConditionalAccessControls - overlap detection' {
         Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 0
         Should -Invoke -CommandName Update-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 1
     }
+
+    Context 'broader-scope existing policies subsume narrower toolkit controls (live-tenant finding)' {
+        # A live tenant had one enabled policy - "all users, all apps, MFA" - that
+        # structurally passed right by CA-RequireMfaGuestAccess's guest-only-condition
+        # check and CA-RequireMfaAzureManagement's specific-AppId-only check, since
+        # neither originally recognized that 'All' already subsumes their narrower
+        # target. Both heuristics were extended to also match a broader existing
+        # policy, not just an exact-scope one.
+
+        It 'CA-RequireMfaGuestAccess treats an existing All-users MFA policy as an overlap' {
+            Mock -CommandName Get-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith {
+                @(New-FakeCAPolicy -Id 'real-1' -DisplayName 'Multifactor authentication for Microsoft partners and vendors' -IncludeUsers @('All') -IncludeApplications @('All') -BuiltInControls @('mfa'))
+            }
+            $result = Set-CA-RequireMfaGuestAccessState -DesiredValue $true -CurrentValue $false
+            $result.Status | Should -Be 'Skipped-PotentialOverlap'
+            Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 0
+        }
+
+        It 'CA-RequireMfaGuestAccess still creates the policy when no existing policy covers guests at all' {
+            Mock -CommandName Get-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith {
+                @(New-FakeCAPolicy -Id 'real-2' -DisplayName 'MFA for Finance group' -IncludeUsers @('11111111-1111-1111-1111-111111111111') -IncludeApplications @('All') -BuiltInControls @('mfa'))
+            }
+            $result = Set-CA-RequireMfaGuestAccessState -DesiredValue $true -CurrentValue $false
+            $result.Status | Should -Be 'Created'
+        }
+
+        It 'CA-RequireMfaAzureManagement treats an existing All-apps MFA policy as an overlap' {
+            Mock -CommandName Get-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith {
+                @(New-FakeCAPolicy -Id 'real-1' -DisplayName 'Multifactor authentication for Microsoft partners and vendors' -IncludeUsers @('All') -IncludeApplications @('All') -BuiltInControls @('mfa'))
+            }
+            $result = Set-CA-RequireMfaAzureManagementState -DesiredValue $true -CurrentValue $false
+            $result.Status | Should -Be 'Skipped-PotentialOverlap'
+            Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 0
+        }
+
+        It 'CA-RequireMfaAzureManagement still creates the policy when no existing policy covers that app at all' {
+            Mock -CommandName Get-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith {
+                @(New-FakeCAPolicy -Id 'real-3' -DisplayName 'MFA for some other app' -IncludeUsers @('All') -IncludeApplications @('some-other-app-id') -BuiltInControls @('mfa'))
+            }
+            $result = Set-CA-RequireMfaAzureManagementState -DesiredValue $true -CurrentValue $false
+            $result.Status | Should -Be 'Created'
+        }
+    }
 }
 
 Describe 'ConditionalAccessControls - idempotency and report-only enforcement' {
