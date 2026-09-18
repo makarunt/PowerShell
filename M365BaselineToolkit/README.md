@@ -108,8 +108,15 @@ trade-off here.
 - Required Graph scopes requested on connect: `Policy.ReadWrite.Authorization`,
   `Policy.ReadWrite.AuthenticationMethod`, `Directory.Read.All`,
   `RoleManagement.Read.Directory`, `Organization.Read.All` (license checks -
-  see below), `Policy.ReadWrite.ConditionalAccess`, `Group.ReadWrite.All`,
-  `Application.Read.All`. Requested on every Graph connection regardless of
+  see below), `Policy.Read.All`, `Policy.ReadWrite.ConditionalAccess`,
+  `Group.ReadWrite.All`, `Application.Read.All`. `Policy.Read.All` is required
+  separately from `Policy.ReadWrite.ConditionalAccess` — confirmed against a
+  live tenant, `Get-MgIdentityConditionalAccessPolicy` (the read cmdlet, called
+  even from `Set-` to look up an existing toolkit-owned policy) fails with
+  `[AccessDenied]: required scopes are missing in the token` under
+  `Policy.ReadWrite.ConditionalAccess` alone, even fully admin-consented —
+  Conditional Access doesn't follow the usual "ReadWrite implies Read" pattern
+  other Graph resources do. Requested on every Graph connection regardless of
   which controls are enabled this run — consenting to a scope costs nothing
   on a tenant that can't use the feature behind it (e.g.
   `Policy.ReadWrite.ConditionalAccess` consents fine on Entra ID Free; it's

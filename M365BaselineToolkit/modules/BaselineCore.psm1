@@ -49,12 +49,23 @@ $script:WorkloadModuleMap = [ordered]@{
 # it's ACTUALLY reading/writing a CA policy that the license gate in
 # ConditionalAccessControls.psm1 prevents on Free) and keeps the connection logic
 # simple - only the license gate decides what actually happens, never the scope list.
+#
+# Policy.Read.All is required separately from Policy.ReadWrite.ConditionalAccess:
+# confirmed against a live tenant, Get-MgIdentityConditionalAccessPolicy (the read
+# cmdlet - called even from Set- to look up an existing toolkit-owned policy before
+# deciding create vs. update) fails with "[AccessDenied]: required scopes are
+# missing in the token" under Policy.ReadWrite.ConditionalAccess alone, even with
+# that scope fully admin-consented and present on the token. Microsoft's own
+# documented permission for this specific cmdlet is Policy.Read.All - Conditional
+# Access does not follow the usual "ReadWrite implies Read" pattern other Graph
+# resources do.
 $script:GraphScopes = @(
     'Policy.ReadWrite.Authorization'
     'Policy.ReadWrite.AuthenticationMethod'
     'Directory.Read.All'
     'RoleManagement.Read.Directory'
     'Organization.Read.All'
+    'Policy.Read.All'
     'Policy.ReadWrite.ConditionalAccess'
     'Group.ReadWrite.All'
     'Application.Read.All'
