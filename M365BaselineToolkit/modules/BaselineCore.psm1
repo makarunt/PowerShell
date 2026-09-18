@@ -880,35 +880,48 @@ function Connect-BaselineWorkload {
             'ExchangeOnline' {
                 Import-Module ExchangeOnlineManagement -ErrorAction Stop
                 # ExchangeOnlineManagement 3.7+ enables Windows Account Manager (WAM)
-                # sign-in by default. WAM occasionally crashes with a NullReferenceException
-                # in Microsoft.Identity.Client's RuntimeBroker when another module (e.g.
-                # Microsoft.Graph) has already used MSAL earlier in the same process - see
+                # sign-in by default. WAM can crash with a NullReferenceException in
+                # Microsoft.Identity.Client's RuntimeBroker when another module (e.g.
+                # Microsoft.Graph, which this toolkit always connects before Exchange
+                # Online - see Get-BaselineConnectionOrder) has already used MSAL earlier
+                # in the same process - see
                 # https://github.com/microsoftgraph/msgraph-sdk-powershell/issues/3576.
-                # -DisableWAM avoids that crash by falling back to the older, broker-free
-                # interactive browser flow.
                 #
-                # This is forced UNCONDITIONALLY, not just as a fallback after a failed normal
-                # attempt - a "try normal first, retry with -DisableWAM on crash" version of
-                # this was shipped and then reverted after a live-tenant repro on an Entra
-                # ID-joined workstation (ExchangeOnlineManagement 3.10.1): once the first (WAM)
-                # attempt crashes in RuntimeBroker's constructor, the retry with -DisableWAM
-                # right after it crashes identically, in the same process - the failed first
-                # attempt appears to leave MSAL's broker state corrupted for the rest of the
-                # process, so -DisableWAM only works if it's the *first* attempt, not a retry
-                # after a crash. Forcing it unconditionally sidesteps that entirely.
+                # -DisableWAM (falling back to the older, broker-free interactive browser
+                # flow) was this toolkit's original mitigation, both as an unconditional
+                # default and as a post-crash retry - both were shipped and both were
+                # proven insufficient by live-tenant repros. Confirmed directly on an
+                # Entra ID-joined workstation (ExchangeOnlineManagement 3.10.1): a
+                # completely standalone `Connect-ExchangeOnline -DisableWAM`, run in a
+                # fresh PowerShell window with no prior Graph connection, succeeds - but
+                # the exact same command fails identically once Microsoft.Graph has
+                # connected first in that process. -DisableWAM does not protect against
+                # this conflict at all once Graph has loaded its own MSAL copy - which,
+                # in this toolkit, is unavoidable, since Graph always connects first.
                 #
-                # (An earlier version of this comment argued -DisableWAM should NOT be forced
-                # unconditionally, based on a theory that it caused HTTP 403s on
-                # Get-ExternalInOutlook/ExchangeOnline-ExternalSenderTag. That theory was wrong -
-                # the real cause was unrelated, in how that control called
-                # Get-ExternalInOutlook; see Get-ExchangeOnline-ExternalSenderTagState in
-                # ExchangeOnlineControls.psm1 for the actual root cause and fix. So there is no
-                # remaining downside to forcing -DisableWAM unconditionally.)
+                # The one thing confirmed to actually work in that same repro, even after
+                # Graph has connected, is device code authentication (-Device): a
+                # different token-acquisition code path that never touches the broken
+                # broker code at all, at the cost of the user having to open a browser
+                # and enter a short code (shown in the console) rather than getting an
+                # automatic popup. So: try the normal flow first (cheapest, works on most
+                # machines), and if it hits this specific crash, fall back to -Device
+                # rather than retrying with -DisableWAM, which is now known not to help.
                 $eopParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
-                if ((Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')) {
-                    $eopParams['DisableWAM'] = $true
+                try {
+                    Connect-ExchangeOnline @eopParams
                 }
-                Connect-ExchangeOnline @eopParams
+                catch {
+                    $isWamBrokerCrash = ($_.Exception -is [System.NullReferenceException] -or
+                         $_.Exception.ToString() -match 'RuntimeBroker' -or
+                         $_.ToString() -match 'RuntimeBroker')
+                    $supportsDevice = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+                    if (-not ($isWamBrokerCrash -and $supportsDevice)) { throw }
+
+                    Write-Warning "Connect-ExchangeOnline failed with the known WAM/RuntimeBroker crash (confirmed: -DisableWAM does not reliably avoid this once Microsoft.Graph has already connected in this process). Falling back to device code sign-in - open the URL shown below in any browser and enter the code."
+                    $eopParams['Device'] = $true
+                    Connect-ExchangeOnline @eopParams
+                }
             }
             'Teams' {
                 Import-Module MicrosoftTeams -ErrorAction Stop
