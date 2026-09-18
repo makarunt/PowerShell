@@ -98,7 +98,7 @@
       "automatable": false,
       "desiredValue": true,
       "description": "Other admins are notified by email whenever an admin's password is reset.",
-      "manualInstructions": "Entra admin center > Identity > Users > User settings > Notify all admins when other admins reset their password = Yes."
+      "manualInstructions": "Entra admin center > Protection > Authentication methods > Password reset > Notifications tab > 'Notify all admins when other admins reset their password?' = Yes."
     },
     {
       "id": "ExchangeOnline-ExternalSenderTag",

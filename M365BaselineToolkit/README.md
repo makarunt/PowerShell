@@ -407,6 +407,24 @@ and excluded from every policy's user condition. Populate it yourself with
 your organization's actual break-glass accounts — this toolkit only ensures
 the group exists and is wired into every policy; it never adds members to it.
 
+### Restore never deletes a CA policy
+
+`-Mode Restore` works by calling each control's `Set-` function with the
+snapshot's recorded value (see [Restore](#restore--push-a-snapshots-recorded-values-back)
+below) - but every `CA-*` control's `Set-` function ignores that value
+entirely and only ever creates or updates a policy toward the report-only
+compliant state; there is no delete/remove code path anywhere in the shared
+CA engine. So if a snapshot recorded a `CA-*` control as non-compliant
+(policy didn't exist yet at snapshot time) and you later run Restore, it will
+not delete a `[M365 Baseline]`-prefixed policy that a subsequent Apply
+created - it just sees the live policy is already compliant and no-ops. This
+is deliberate, consistent with this module's report-only, never-destructive
+design (see the top of this section) - removing a CA policy automatically,
+even during Restore, carries real lockout risk if something were misjudged.
+To actually remove a toolkit-created policy, do it by hand: Entra admin
+center > Protection > Conditional Access, or
+`Remove-MgIdentityConditionalAccessPolicy -ConditionalAccessPolicyId <id>`.
+
 ### Non-goals
 
 This module deliberately does not include named-location/trusted-IP/
