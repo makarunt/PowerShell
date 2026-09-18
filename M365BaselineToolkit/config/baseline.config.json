@@ -295,12 +295,12 @@
     {
       "id": "CA-RequireMfaAzureManagement",
       "workload": "ConditionalAccess",
-      "enabled": true,
+      "enabled": false,
       "automatable": true,
       "tier": 1,
       "forceCreateDespiteOverlap": false,
       "desiredValue": true,
-      "description": "Report-only Conditional Access policy requiring MFA for all users accessing the Microsoft Azure Management app (Azure Portal/CLI/PowerShell/REST). Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+      "description": "Report-only Conditional Access policy requiring MFA for all users accessing the Microsoft Azure Management app (Azure Portal/CLI/PowerShell/REST). Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers. Disabled for this tenant: already fully covered by the existing enabled policy 'Multifactor authentication for Microsoft partners and vendors' (All users, All apps - Applications.IncludeApplications confirmed as {All} - includes Azure Management), which this control's own overlap heuristic doesn't recognize since it only matches on the specific Azure Management app id, not a broader 'All apps' scope. Re-enable if that policy is ever removed or narrowed."
     },
     {
       "id": "CA-RequireMfaSecurityInfoRegistration",
@@ -315,12 +315,12 @@
     {
       "id": "CA-RequireMfaGuestAccess",
       "workload": "ConditionalAccess",
-      "enabled": true,
+      "enabled": false,
       "automatable": true,
       "tier": 1,
       "forceCreateDespiteOverlap": false,
       "desiredValue": true,
-      "description": "Report-only Conditional Access policy requiring MFA for guest and external users of every type, on all cloud apps. Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+      "description": "Report-only Conditional Access policy requiring MFA for guest and external users of every type, on all cloud apps. Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers. Disabled for this tenant: already fully covered by the existing enabled policy 'Multifactor authentication for Microsoft partners and vendors' (All users, All apps - 'All' users already includes guests), which this control's own overlap heuristic doesn't recognize since it only matches on a guest-scoped condition, not a broader 'All users' scope. Re-enable if that policy is ever removed or narrowed to exclude guests."
     },
     {
       "id": "CA-RequireMfaSignInRisk",
