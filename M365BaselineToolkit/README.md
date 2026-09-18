@@ -449,18 +449,11 @@ opt-in addition — never modify this module to make report-only optional.
   - `Connect-ExchangeOnline` fails with a `NullReferenceException` inside
     `Microsoft.Identity.Client...RuntimeBroker` — happens when Exchange
     Online connects *second*, after Graph has already initialized MSAL's WAM
-    broker. The toolkit connects normally first, and if that specific crash
-    happens, falls back to `-Device` (device code sign-in — you'll be shown a
-    URL and a short code to enter in any browser, instead of an automatic
-    popup) rather than retrying with `-DisableWAM`. `-DisableWAM` was tried as
-    the fallback first, both as an unconditional default and as a post-crash
-    retry, and both were proven insufficient on a live Entra ID-joined
-    workstation: `-DisableWAM` only avoids this crash when Exchange Online
-    connects *before* Graph in the process — which this toolkit never does,
-    by design, to avoid the other conflict above — so it provides no real
-    protection here. `-Device` uses a different token-acquisition path that
-    doesn't touch the broken broker code at all, so it reliably works even
-    after Graph has connected.
+    broker. The toolkit connects normally first and only retries with
+    `-DisableWAM` (`ExchangeOnlineManagement` 3.7+, if your installed module
+    version supports that switch) if this specific crash actually occurs —
+    `-DisableWAM` is a strictly worse fallback otherwise, so it's never
+    forced on unconditionally.
 
   If you still hit either error after pulling the latest version of this
   toolkit, it's almost always duplicate/stale module versions left behind by
