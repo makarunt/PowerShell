@@ -885,32 +885,30 @@ function Connect-BaselineWorkload {
                 # Microsoft.Graph) has already used MSAL earlier in the same process - see
                 # https://github.com/microsoftgraph/msgraph-sdk-powershell/issues/3576.
                 # -DisableWAM avoids that crash by falling back to the older, broker-free
-                # interactive browser flow. It should not be forced unconditionally though,
-                # since it's a strictly worse flow when WAM isn't actually failing: attempt
-                # the normal WAM connection first, and fall back to -DisableWAM only if that
-                # specific RuntimeBroker crash actually happens.
+                # interactive browser flow.
                 #
-                # (An earlier version of this comment blamed -DisableWAM for HTTP 403s on
-                # Get-ExternalInOutlook/ExchangeOnline-ExternalSenderTag. That was wrong -
+                # This is forced UNCONDITIONALLY, not just as a fallback after a failed normal
+                # attempt - a "try normal first, retry with -DisableWAM on crash" version of
+                # this was shipped and then reverted after a live-tenant repro on an Entra
+                # ID-joined workstation (ExchangeOnlineManagement 3.10.1): once the first (WAM)
+                # attempt crashes in RuntimeBroker's constructor, the retry with -DisableWAM
+                # right after it crashes identically, in the same process - the failed first
+                # attempt appears to leave MSAL's broker state corrupted for the rest of the
+                # process, so -DisableWAM only works if it's the *first* attempt, not a retry
+                # after a crash. Forcing it unconditionally sidesteps that entirely.
+                #
+                # (An earlier version of this comment argued -DisableWAM should NOT be forced
+                # unconditionally, based on a theory that it caused HTTP 403s on
+                # Get-ExternalInOutlook/ExchangeOnline-ExternalSenderTag. That theory was wrong -
                 # the real cause was unrelated, in how that control called
                 # Get-ExternalInOutlook; see Get-ExchangeOnline-ExternalSenderTagState in
-                # ExchangeOnlineControls.psm1 for the actual root cause and fix.)
+                # ExchangeOnlineControls.psm1 for the actual root cause and fix. So there is no
+                # remaining downside to forcing -DisableWAM unconditionally.)
                 $eopParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
-                $supportsDisableWam = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')
-                try {
-                    Connect-ExchangeOnline @eopParams
-                }
-                catch {
-                    $isWamBrokerCrash = $supportsDisableWam -and
-                        ($_.Exception -is [System.NullReferenceException] -or
-                         $_.Exception.ToString() -match 'RuntimeBroker' -or
-                         $_.ToString() -match 'RuntimeBroker')
-                    if (-not $isWamBrokerCrash) { throw }
-
-                    Write-Warning "Connect-ExchangeOnline failed with what looks like the known WAM/RuntimeBroker crash; retrying with -DisableWAM."
+                if ((Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')) {
                     $eopParams['DisableWAM'] = $true
-                    Connect-ExchangeOnline @eopParams
                 }
+                Connect-ExchangeOnline @eopParams
             }
             'Teams' {
                 Import-Module MicrosoftTeams -ErrorAction Stop
