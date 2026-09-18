@@ -255,14 +255,6 @@
       "description": "Idle browser sessions in SharePoint/OneDrive are warned and then signed out automatically."
     },
     {
-      "id": "SharePointOnline-UnmanagedDeviceAccess",
-      "workload": "SharePointOnline",
-      "enabled": false,
-      "automatable": true,
-      "desiredValue": "AllowLimitedAccess",
-      "description": "Unmanaged/unknown devices get limited (web-only, no download) access to SharePoint and OneDrive instead of full access. Disabled by default: unlike the report-only Conditional Access controls, this takes effect immediately (SharePoint auto-creates enforced Entra CA policies as a side effect) with no staging/review step, and can break BYOD/contractor workflows that rely on downloading or syncing files from unmanaged devices. Enable deliberately after reviewing device-access needs."
-    },
-    {
       "id": "CA-RequireMfaAllUsers",
       "workload": "ConditionalAccess",
       "enabled": true,

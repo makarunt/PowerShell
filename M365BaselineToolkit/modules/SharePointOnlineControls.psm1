@@ -320,53 +320,6 @@ function Set-SharePointOnline-IdleSessionSignOutState {
     return [pscustomobject]@{ Id = 'SharePointOnline-IdleSessionSignOut'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated SPOBrowserIdleSignOut.' }
 }
 
-# ---------------------------------------------------------------------------
-# SharePointOnline-UnmanagedDeviceAccess
-# ---------------------------------------------------------------------------
-
-function Get-SharePointOnline-UnmanagedDeviceAccessState {
-    <#
-    .SYNOPSIS
-        Reads the unmanaged/unknown device access posture.
-    .EXAMPLE
-        Get-SharePointOnline-UnmanagedDeviceAccessState
-    #>
-    [CmdletBinding()]
-    [OutputType([pscustomobject])]
-    param()
-    $tenant = Get-SPOTenant -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'SharePointOnline-UnmanagedDeviceAccess'; Value = [string]$tenant.ConditionalAccessPolicy }
-}
-
-function Set-SharePointOnline-UnmanagedDeviceAccessState {
-    <#
-    .SYNOPSIS
-        Idempotently sets the unmanaged/unknown device access posture.
-    .PARAMETER DesiredValue
-        String enum accepted by Set-SPOTenant -ConditionalAccessPolicy.
-    .PARAMETER CurrentValue
-        Optional pre-fetched current value.
-    .EXAMPLE
-        Set-SharePointOnline-UnmanagedDeviceAccessState -DesiredValue 'AllowLimitedAccess'
-    #>
-    [CmdletBinding()]
-    [OutputType([pscustomobject])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$DesiredValue,
-
-        [Parameter()]
-        [AllowNull()]
-        [object]$CurrentValue
-    )
-    $current = if ($null -ne $CurrentValue) { [string]$CurrentValue } else { (Get-SharePointOnline-UnmanagedDeviceAccessState).Value }
-    if ($current -eq $DesiredValue) {
-        return [pscustomobject]@{ Id = 'SharePointOnline-UnmanagedDeviceAccess'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
-    }
-    Set-SPOTenant -ConditionalAccessPolicy $DesiredValue -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'SharePointOnline-UnmanagedDeviceAccess'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated ConditionalAccessPolicy.' }
-}
-
 Export-ModuleMember -Function @(
     'Get-SharePointOnline-SharingCapabilityState', 'Set-SharePointOnline-SharingCapabilityState'
     'Get-SharePointOnline-DefaultSharingLinkTypeState', 'Set-SharePointOnline-DefaultSharingLinkTypeState'
@@ -374,5 +327,4 @@ Export-ModuleMember -Function @(
     'Get-SharePointOnline-AnonymousLinkExpirationState', 'Set-SharePointOnline-AnonymousLinkExpirationState'
     'Get-SharePointOnline-LegacyAuthProtocolsState', 'Set-SharePointOnline-LegacyAuthProtocolsState'
     'Get-SharePointOnline-IdleSessionSignOutState', 'Set-SharePointOnline-IdleSessionSignOutState'
-    'Get-SharePointOnline-UnmanagedDeviceAccessState', 'Set-SharePointOnline-UnmanagedDeviceAccessState'
 )
