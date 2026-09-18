@@ -53,6 +53,14 @@
       "description": "Regular users cannot register new app registrations or create new Entra ID tenants."
     },
     {
+      "id": "EntraID-BlockSelfServiceSecurityGroupCreation",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": false,
+      "description": "Regular users cannot create security groups; only admins can."
+    },
+    {
       "id": "EntraID-RestrictAdminPortalAccess",
       "workload": "EntraID",
       "enabled": true,

@@ -334,6 +334,65 @@ function Set-EntraID-BlockSelfServiceAppCreationState {
 }
 
 # ---------------------------------------------------------------------------
+# EntraID-BlockSelfServiceSecurityGroupCreation
+# ---------------------------------------------------------------------------
+
+function Get-EntraID-BlockSelfServiceSecurityGroupCreationState {
+    <#
+    .SYNOPSIS
+        Reads whether non-admin users can create security groups.
+    .EXAMPLE
+        Get-EntraID-BlockSelfServiceSecurityGroupCreationState
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
+    $policy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
+    return [pscustomobject]@{ Id = 'EntraID-BlockSelfServiceSecurityGroupCreation'; Value = [bool]$policy.DefaultUserRolePermissions.AllowedToCreateSecurityGroups }
+}
+
+function Set-EntraID-BlockSelfServiceSecurityGroupCreationState {
+    <#
+    .SYNOPSIS
+        Idempotently blocks/unblocks self-service security group creation.
+    .PARAMETER DesiredValue
+        Boolean - $false to restrict security group creation to admins.
+    .PARAMETER CurrentValue
+        Optional pre-fetched current value.
+    .EXAMPLE
+        Set-EntraID-BlockSelfServiceSecurityGroupCreationState -DesiredValue $false
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [bool]$DesiredValue,
+
+        [Parameter()]
+        [AllowNull()]
+        [object]$CurrentValue
+    )
+    $current = if ($null -ne $CurrentValue) { [bool]$CurrentValue } else { (Get-EntraID-BlockSelfServiceSecurityGroupCreationState).Value }
+    if ($current -eq $DesiredValue) {
+        return [pscustomobject]@{ Id = 'EntraID-BlockSelfServiceSecurityGroupCreation'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+    }
+    # Same pattern as EntraID-BlockSelfServiceAppCreation: send only the one
+    # defaultUserRolePermissions sub-property being changed. Confirmed on a
+    # real tenant that this does NOT reset allowedToCreateApps/
+    # allowedToCreateTenants when only they were previously PATCHed, so the
+    # reverse (patching this field alone without touching those two) is safe
+    # the same way - Graph merges within defaultUserRolePermissions rather
+    # than replacing the whole nested object.
+    $body = @{
+        defaultUserRolePermissions = @{
+            allowedToCreateSecurityGroups = $DesiredValue
+        }
+    }
+    Update-MgPolicyAuthorizationPolicy -BodyParameter $body -ErrorAction Stop
+    return [pscustomobject]@{ Id = 'EntraID-BlockSelfServiceSecurityGroupCreation'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated AllowedToCreateSecurityGroups.' }
+}
+
+# ---------------------------------------------------------------------------
 # EntraID-RestrictAdminPortalAccess (audit-only; no confirmed cmdlet)
 # ---------------------------------------------------------------------------
 
@@ -597,6 +656,7 @@ Export-ModuleMember -Function @(
     'Get-EntraID-GuestUserRoleRestrictionState', 'Set-EntraID-GuestUserRoleRestrictionState'
     'Get-EntraID-BlockUserConsentToAppsState', 'Set-EntraID-BlockUserConsentToAppsState'
     'Get-EntraID-BlockSelfServiceAppCreationState', 'Set-EntraID-BlockSelfServiceAppCreationState'
+    'Get-EntraID-BlockSelfServiceSecurityGroupCreationState', 'Set-EntraID-BlockSelfServiceSecurityGroupCreationState'
     'Get-EntraID-RestrictAdminPortalAccessState', 'Set-EntraID-RestrictAdminPortalAccessState'
     'Get-EntraID-AuthMethodsHardeningState', 'Set-EntraID-AuthMethodsHardeningState'
     'Get-EntraID-MfaRegistrationCampaignState', 'Set-EntraID-MfaRegistrationCampaignState'
