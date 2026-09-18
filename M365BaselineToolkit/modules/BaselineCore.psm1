@@ -1011,9 +1011,11 @@ function Invoke-BaselineControlAudit {
     foreach ($entry in $Catalog) {
         $currentValue = $null
         $errorMessage = $null
+        $detail = $null
         try {
             $stateResult = & $entry.GetCommand
             $currentValue = $stateResult.Value
+            if ($stateResult.PSObject.Properties['Detail']) { $detail = $stateResult.Detail }
         }
         catch {
             $errorMessage = $_.Exception.Message
@@ -1030,6 +1032,7 @@ function Invoke-BaselineControlAudit {
             DesiredValue       = $entry.DesiredValue
             Compliant          = $compliant
             ManualInstructions = $entry.ManualInstructions
+            Detail             = $detail
             Error              = $errorMessage
         })
     }
@@ -1550,7 +1553,7 @@ function Export-BaselineMarkdownReport {
             $lines.Add("| $($r.Id) | $($r.Workload) | $($r.Description) | $current | $desired | $compliantText | $($r.Automatable) | $action | $resultMsg |")
         }
         else {
-            $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } else { '' }
+            $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } elseif ($r.Detail) { [string]$r.Detail } else { '' }
             $lines.Add("| $($r.Id) | $($r.Workload) | $($r.Description) | $current | $desired | $compliantText | $($r.Automatable) | $notes |")
         }
     }
@@ -1607,7 +1610,7 @@ function Export-BaselineHtmlReport {
             "<td>$([System.Net.WebUtility]::HtmlEncode($action))</td><td>$([System.Net.WebUtility]::HtmlEncode([string]$msg))</td>"
         }
         else {
-            $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } else { '' }
+            $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } elseif ($r.Detail) { [string]$r.Detail } else { '' }
             "<td>$([System.Net.WebUtility]::HtmlEncode($notes))</td>"
         }
         "<tr><td>$([System.Net.WebUtility]::HtmlEncode($r.Id))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Workload))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Description))</td><td>$([System.Net.WebUtility]::HtmlEncode($current))</td><td>$([System.Net.WebUtility]::HtmlEncode($desired))</td><td>$compliantText</td><td>$($r.Automatable)</td>$extra</tr>"

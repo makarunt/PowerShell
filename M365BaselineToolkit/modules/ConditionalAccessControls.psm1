@@ -344,10 +344,23 @@ function Get-BaselineCAControlState {
         controls use), never an error; (2) does a policy with this exact display
         name exist; (3) does it match state=report-only, the emergency-group
         exclusion, and the control's own condition/grant shape.
+
+        When the toolkit-owned policy doesn't exist yet, this also runs the same
+        (read-only) overlap scan Set- uses before deciding whether to create one,
+        so Audit can tell you up front whether Apply would actually create
+        anything here or just skip it as redundant with an existing policy -
+        without this, "Compliant: No" during Audit couldn't distinguish "genuinely
+        missing" from "would be skipped as redundant," which only became
+        knowable once Set- actually ran. Purely informational: Find-BaselineCAOverlap
+        only scans, it never creates or changes anything, so this is safe to run
+        during Audit. Doesn't know about this control's forceCreateDespiteOverlap
+        config setting (Get- isn't passed that - only Set- is), so the note is
+        phrased to stay accurate whichever way that's set.
     .PARAMETER Spec
         Hashtable: Id, DisplayName, Tier, ComplianceCheck (scriptblock($policy) -> bool,
         checking only conditions/grantControls - state and emergency-group
-        exclusion are checked here, once, for every control).
+        exclusion are checked here, once, for every control), OverlapPredicate
+        (scriptblock($policy) -> bool, reused here purely for the Audit-time note).
     .EXAMPLE
         Get-BaselineCAControlState -Spec $spec
     #>
@@ -362,7 +375,14 @@ function Get-BaselineCAControlState {
     }
     $policy = Find-BaselineCAPolicyByName -DisplayName $Spec.DisplayName
     if (-not $policy) {
-        return [pscustomobject]@{ Id = $Spec.Id; Value = $false; Detail = "Policy '$($Spec.DisplayName)' does not exist yet." }
+        $overlap = Find-BaselineCAOverlap -Predicate $Spec.OverlapPredicate
+        $detail = if ($overlap) {
+            "Policy '$($Spec.DisplayName)' does not exist yet. An existing, non-toolkit-owned policy ('$($overlap.DisplayName)', id $($overlap.Id)) heuristically overlaps with this control's intent - Apply will skip creating this one (Skipped-PotentialOverlap) unless forceCreateDespiteOverlap is set for it in config."
+        }
+        else {
+            "Policy '$($Spec.DisplayName)' does not exist yet."
+        }
+        return [pscustomobject]@{ Id = $Spec.Id; Value = $false; Detail = $detail }
     }
     $emergencyGroupId = Get-BaselineCAEmergencyAccessGroupId
     $compliant = ([string]$policy.State -eq $script:CAReportOnlyState) -and
