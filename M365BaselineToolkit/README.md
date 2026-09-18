@@ -550,3 +550,218 @@ this against a production tenant.
   policy management, no Security Defaults toggling, no controls beyond the
   inventory in this README, and no telemetry — this runs entirely against
   your own tenant and stays local.
+
+## App-only (certificate) authentication
+
+`Invoke-M365Baseline.AppOnly.ps1` is an alternative entry point that connects
+with certificate-based, app-only (client-credentials) authentication instead
+of an interactive sign-in. It exists for unattended/scheduled runs, and for
+any workstation where interactive sign-in through Windows Account Manager
+(WAM) is unreliable (see "If something goes wrong mid-run" above).
+
+**This is a parallel path, not a replacement.** `Invoke-M365Baseline.ps1`
+(interactive) is completely unmodified by this addition and behaves exactly
+as it always has — nothing about how you use it today changes. The two
+scripts share one `config/baseline.config.json`, one JSON schema, and all
+five control catalog modules (`EntraIdControls.psm1`,
+`ExchangeOnlineControls.psm1`, `TeamsControls.psm1`,
+`SharePointOnlineControls.psm1`, `ConditionalAccessControls.psm1`) byte-for-byte
+unchanged — every `Get-`/`Set-` function calls whatever service cmdlets it
+always called, and those cmdlets don't know or care how the connection they're
+using was established. So a best-practice change made by editing
+`baseline.config.json` (or adding a new control to a catalog module) applies
+to both scripts automatically; only the *connection method* differs between
+them. They also write to the same `/reports/` and `/backups/` folders with the
+same file-naming convention — a backup taken by one script is a normal input
+to `-Mode Restore` on the other, and vice versa, since Restore only needs a
+live connection plus the same `Set-` functions, which both scripts provide.
+
+**Why this needed no copy of the orchestration engine.** `BaselineCore.psm1`
+already separates "establish a connection" (`Connect-BaselineWorkload`, called
+only from `Invoke-M365Baseline.ps1`'s own top-level script body) from "run the
+Audit/Apply/Restore loop" (`Invoke-BaselineControlAudit`/`-Apply`/`-Restore`,
+which take an already-connected session as a given and never call any
+`Connect-*` cmdlet themselves). Because that separation already existed,
+`Invoke-M365Baseline.AppOnly.ps1` didn't need a duplicate copy of
+`BaselineCore.psm1`'s engine (no `BaselineCoreAppOnly.psm1` was needed) — it
+imports and calls the exact same exported functions
+(`Import-BaselineConfig`, `Get-BaselineControlCatalog`,
+`Get-BaselineConnectionOrder`, `Assert-BaselineRequiredModules`,
+`Invoke-BaselineControlAudit`/`-Apply`/`-Restore`, `Save-`/`Import-BaselineSnapshot`,
+`Export-BaselineMarkdownReport`/`-HtmlReport`, `Disconnect-BaselineWorkload`)
+the interactive script does. Only the connection step itself is swapped, via
+`modules/AppOnlyConnections.psm1`'s `Connect-M365BaselineServicesAppOnly`. The
+top-level parameter parsing → connect → mode dispatch → report writing
+"glue" in `Invoke-M365Baseline.AppOnly.ps1` is necessarily its own copy (that
+glue was never an importable function in the interactive script to begin
+with), but no control logic, compliance logic, or report/backup logic is
+duplicated anywhere.
+
+**No interactive fallback.** `Invoke-M365Baseline.AppOnly.ps1` never falls
+back to an interactive prompt for anything. If app-only auth fails to connect
+to a service, the whole run fails immediately (see "Troubleshooting a
+connection failure" below). If a specific control's cmdlet fails *after* a
+successful connection — e.g. because that particular cmdlet or parameter
+combination genuinely doesn't support app-only auth for your tenant — Apply
+and Restore report it as `Failed-AppOnlyUnsupported` in this script's own
+console output and reports, with a note to re-run that specific control via
+the interactive `Invoke-M365Baseline.ps1` instead. It is never silently
+retried interactively.
+
+### One-time tenant setup
+
+1. **Register an Entra app.** Entra admin center → **Identity → Applications
+   → App registrations → New registration**. Single-tenant is sufficient.
+   Note the **Application (client) ID** and **Directory (tenant) ID** — these
+   are `-AppId`/`-TenantId` below.
+2. **Generate a certificate and attach it to the app.**
+   ```powershell
+   $cert = New-SelfSignedCertificate -Subject "CN=M365BaselineToolkit-AppOnly" `
+       -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable `
+       -KeySpec Signature -KeyLength 2048 -KeyAlgorithm RSA -HashAlgorithm SHA256 `
+       -NotAfter (Get-Date).AddYears(2)
+   Export-Certificate -Cert $cert -FilePath ./m365-baseline-app-only.cer
+   ```
+   Upload `m365-baseline-app-only.cer` under the app registration's
+   **Certificates & secrets → Certificates** tab. Note `$cert.Thumbprint` —
+   that's `-CertificateThumbprint` below (or export a `.pfx` with
+   `Export-PfxCertificate` if you'd rather use `-CertificatePath`).
+3. **Grant Graph API permissions.** App registration → **API permissions →
+   Add a permission → Microsoft Graph → Application permissions**. Add the
+   same permissions `Connect-BaselineWorkload` requests interactively (see
+   `$script:GraphScopes` in `BaselineCore.psm1`, and the "Required Graph
+   scopes" note under Prerequisites above) as their **Application**
+   equivalents — Graph exposes an Application-type permission of the same
+   name for each of them (`Policy.ReadWrite.Authorization`,
+   `Policy.ReadWrite.AuthenticationMethod`, `Directory.Read.All`,
+   `RoleManagement.Read.Directory`, `Organization.Read.All`, `Policy.Read.All`,
+   `Policy.ReadWrite.ConditionalAccess`, `Group.ReadWrite.All`,
+   `Application.Read.All`). Then **Grant admin consent for &lt;tenant&gt;**.
+4. **Grant Exchange Online's app-only permission.** Same **API permissions**
+   blade → **Add a permission → APIs my organization uses → Office 365
+   Exchange Online → Application permissions → `Exchange.ManageAsApp`** →
+   grant admin consent.
+5. **Assign directory roles the app's service principal separately needs.**
+   API permission consent alone is not enough for Exchange Online or Teams —
+   each also requires the app's *service principal* to hold a directory role,
+   the same way a human admin account would:
+   - Entra admin center → **Identity → Roles & administrators → Exchange
+     Administrator → Add assignments** → search for the app by name → add it.
+   - Same for **Teams Administrator**, if any `Teams-*` control is enabled.
+   - SharePoint has no equivalent separate role requirement beyond the API
+     permission — Microsoft.Online.SharePoint.PowerShell's app-only support
+     (GA November 2025) authorizes purely via the app registration and
+     tenant-level SharePoint admin API permission, granted in the same **API
+     permissions** blade (**SharePoint → Application permissions →
+     `Sites.FullControl.All`** at minimum for `Set-SPOTenant`-class calls;
+     confirm the exact permission your installed module version documents).
+
+   Graph itself needs no separate directory-role assignment — the Application
+   API permissions granted in step 3 are sufficient on their own.
+
+### Certificate custody
+
+- **On-box / scheduled task:** keep the certificate in the local machine or
+  service account's `Cert:\CurrentUser\My` (or `Cert:\LocalMachine\My`, with
+  `-CertificateStoreLocation LocalMachine`) store, with NTFS permissions
+  restricted to the account the scheduled task runs as. Don't export the
+  `.pfx` to disk alongside the script.
+- **Hosted in Azure (Automation Account, Azure Functions, a VM, etc.):** use
+  Azure Key Vault. Retrieve the certificate at runtime with the Key Vault
+  SDK/`Az.KeyVault` and pass the resulting `X509Certificate2` object directly
+  via `-Certificate`, rather than writing it to a file or the local store at
+  all.
+- Either way, treat the certificate as a credential: rotate it before
+  `-NotAfter`, and revoke/replace it (both in the app registration and
+  wherever it's stored) immediately if it may have been exposed.
+
+### Verified cmdlet-compatibility notes
+
+These are what's documented as *not* supported under app-only auth for the
+services this toolkit uses. Nothing on either exclusion list is called by
+this toolkit's control modules, so Exchange Online and Teams app-only
+coverage for this toolkit's specific cmdlets is expected to work as-is.
+
+- **Exchange Online:** app-only auth excludes Microsoft 365 Group management
+  cmdlets and the entire Security & Compliance/Purview cmdlet surface.
+  Neither category is used by any `ExchangeOnline-*` control in this toolkit
+  (anti-spam, anti-phishing, mailbox auditing, DKIM, transport/auto-forwarding,
+  SMTP AUTH — all plain Exchange Online configuration cmdlets).
+- **Teams:** app-only auth excludes `New-Team`, the
+  `*-CsOnlineApplicationInstance` family, `*PolicyPackage*` cmdlets,
+  `*-CsTeamsShiftsConnection*`, `*-CsBatchTeamsDeployment*`,
+  `Get-/Set-CsTeamsSettingsCustomApp`, and `Get-MultiGeoRegion`. None of these
+  are used by any `Teams-*` control in this toolkit (federation, meeting
+  defaults, app permission policy, guest access — all tenant-config cmdlets
+  outside that exclusion list).
+- **SharePoint:** Microsoft has published **no** exclusion list — app-only
+  support for `Microsoft.Online.SharePoint.PowerShell` only reached general
+  availability in November 2025. Unlike the other two, this toolkit **makes
+  no claim, and no test in this repository asserts,** that `Set-SPOTenant`
+  and `Set-SPOBrowserIdleSignOut` (the cmdlets `SharePointOnlineControls.psm1`
+  uses) actually work under app-only auth. **This is something you need to
+  verify empirically against the exact PowerShell and module version you'll
+  run this under, before trusting `-Mode Apply` against a production tenant.**
+  Run `-Mode Audit` first with only SharePoint controls enabled and confirm
+  it reads cleanly; then test `-Mode Apply` against a non-production
+  tenant/site collection if you have one.
+
+### Parameters specific to this script
+
+| Parameter | Purpose |
+|---|---|
+| `-AppId` | The app registration's Application (client) ID. |
+| `-TenantId` | Tenant id (GUID) or verified domain, e.g. `contoso.onmicrosoft.com`. |
+| `-Organization` | Required if any enabled control needs `ExchangeOnline` — the tenant's `*.onmicrosoft.com` domain specifically (not a GUID). |
+| `-SpoAdminUrl` | Required if any enabled control needs `SharePointOnline` — same meaning as the interactive script's `-SharePointAdminUrl`. |
+| `-CertificateThumbprint [-CertificateStoreLocation]` | Certificate from a local store (`CurrentUser` default, or `LocalMachine`). |
+| `-CertificatePath [-CertificatePassword]` | Certificate from a `.pfx` file. |
+| `-Certificate` | A pre-built `X509Certificate2` object (e.g. retrieved from Key Vault by the caller). |
+
+Exactly one of the three certificate-input forms is required per run; all
+other parameters (`-Mode`, `-ConfigPath`, `-ReportPath`, `-BackupPath`,
+`-BackupFile`, `-InstallMissingModules`, `-StopOnError`,
+`-AcknowledgeFederationBlockAll`, `-IncludeHtmlReport`,
+`-KeepConnectionsOpen`) are identical in name and meaning to
+`Invoke-M365Baseline.ps1`.
+
+```powershell
+./Invoke-M365Baseline.AppOnly.ps1 -Mode Audit `
+    -AppId <app-id> -TenantId contoso.onmicrosoft.com `
+    -CertificateThumbprint <thumbprint>
+
+./Invoke-M365Baseline.AppOnly.ps1 -Mode Apply `
+    -AppId <app-id> -TenantId contoso.onmicrosoft.com `
+    -Organization contoso.onmicrosoft.com -SpoAdminUrl https://contoso-admin.sharepoint.com `
+    -CertificatePath ./app-only.pfx -CertificatePassword (Read-Host -AsSecureString) -WhatIf
+```
+
+### Troubleshooting a connection failure
+
+A connection failure names the specific service and the certificate input
+form used, then points here. It's always one of three distinct problems:
+
+1. **Certificate problem** — expired, revoked, or the certificate you're
+   passing doesn't match the public key actually uploaded to the app
+   registration. Check `$cert.NotAfter` and the thumbprint against what's
+   listed under the app registration's **Certificates & secrets**.
+2. **Missing/unconsented API permission** — the specific service's API
+   permission (Graph Application permissions, `Exchange.ManageAsApp`, or
+   SharePoint's application permission) wasn't added, or was added but never
+   admin-consented. Check **API permissions** on the app registration — an
+   unconsented permission shows a warning icon there.
+3. **Missing directory role assignment** — Exchange Online and Teams
+   specifically also require the app's service principal to hold a directory
+   role (Exchange Administrator / Teams Administrator), separate from and in
+   addition to API permission consent. Check **Roles & administrators** in
+   the Entra admin center for the relevant role's **Assignments**.
+
+### Tests
+
+`tests/AppOnlyConnections.Tests.ps1` covers `Connect-M365BaselineServicesAppOnly`
+(all three certificate-input forms, the uniform-certificate-object guarantee,
+lazy connect, and specific error messages), a mechanically-enforced file-hash
+check that none of the files listed in "This is a parallel path, not a
+replacement" above have changed, and an integration test that runs both
+entry-point scripts against the same config and identically-mocked service
+responses and diffs their Audit-mode compliance verdicts.
