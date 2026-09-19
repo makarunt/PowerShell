@@ -640,7 +640,12 @@ retried interactively.
 4. **Grant Exchange Online's app-only permission.** Same **API permissions**
    blade → **Add a permission → APIs my organization uses → Office 365
    Exchange Online → Application permissions → `Exchange.ManageAsApp`** →
-   grant admin consent.
+   grant admin consent. The permission picker also lists
+   `Exchange.ManageAsAppV2` — that's a different, newer permission for
+   Microsoft's Admin REST API v2.0 endpoint, not for the
+   `ExchangeOnlineManagement` PowerShell module `Connect-ExchangeOnline` uses.
+   This toolkit needs the plain `Exchange.ManageAsApp` (no `V2` suffix); don't
+   grant both.
 5. **Assign directory roles the app's service principal separately needs.**
    API permission consent alone is not enough for Exchange Online or Teams —
    each also requires the app's *service principal* to hold a directory role,
