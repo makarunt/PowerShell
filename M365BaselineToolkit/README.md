@@ -647,19 +647,26 @@ retried interactively.
    This toolkit needs the plain `Exchange.ManageAsApp` (no `V2` suffix); don't
    grant both.
 5. **Assign directory roles the app's service principal separately needs.**
-   API permission consent alone is not enough for Exchange Online or Teams —
-   each also requires the app's *service principal* to hold a directory role,
-   the same way a human admin account would:
+   API permission consent alone is not enough for Exchange Online, Teams, or
+   SharePoint — each also requires the app's *service principal* to hold a
+   directory role, the same way a human admin account would (confirmed
+   against a real tenant - a missing role assignment produces a generic
+   "Could not authenticate" failure with no indication that a role, not a
+   permission, is what's actually missing):
    - Entra admin center → **Identity → Roles & administrators → Exchange
      Administrator → Add assignments** → search for the app by name → add it.
    - Same for **Teams Administrator**, if any `Teams-*` control is enabled.
-   - SharePoint has no equivalent separate role requirement beyond the API
-     permission — Microsoft.Online.SharePoint.PowerShell's app-only support
-     (GA November 2025) authorizes purely via the app registration and
-     tenant-level SharePoint admin API permission, granted in the same **API
-     permissions** blade (**SharePoint → Application permissions →
-     `Sites.FullControl.All`** at minimum for `Set-SPOTenant`-class calls;
-     confirm the exact permission your installed module version documents).
+   - Same for **SharePoint Administrator**, if any `SharePointOnline-*`
+     control is enabled. Also grant the SharePoint API permission itself in
+     the same **API permissions** blade → **Add a permission → APIs my
+     organization uses → Office 365 SharePoint Online → Application
+     permissions → `Sites.FullControl.All`** → admin consent. (Microsoft
+     Graph has no equivalent "SharePoint" permission entry for this — it has
+     to come from the separate Office 365 SharePoint Online API.)
+     `Microsoft.Online.SharePoint.PowerShell` version `16.0.26712.12000` or
+     newer is required (app-only support GA'd November 2025); check
+     `Get-Module Microsoft.Online.SharePoint.PowerShell -ListAvailable` and
+     `Update-Module` if older.
 
    Graph itself needs no separate directory-role assignment — the Application
    API permissions granted in step 3 are sufficient on their own.
@@ -755,11 +762,14 @@ form used, then points here. It's always one of three distinct problems:
    SharePoint's application permission) wasn't added, or was added but never
    admin-consented. Check **API permissions** on the app registration — an
    unconsented permission shows a warning icon there.
-3. **Missing directory role assignment** — Exchange Online and Teams
-   specifically also require the app's service principal to hold a directory
-   role (Exchange Administrator / Teams Administrator), separate from and in
-   addition to API permission consent. Check **Roles & administrators** in
-   the Entra admin center for the relevant role's **Assignments**.
+3. **Missing directory role assignment** — Exchange Online, Teams, and
+   SharePoint each also require the app's service principal to hold a
+   directory role (Exchange Administrator / Teams Administrator / SharePoint
+   Administrator respectively), separate from and in addition to API
+   permission consent. Check **Roles & administrators** in the Entra admin
+   center for the relevant role's **Assignments**. This is the single most
+   common cause of a generic "Could not authenticate" SharePoint failure with
+   an otherwise fully correct cert/permission setup.
 
 ### Tests
 

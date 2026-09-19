@@ -228,7 +228,7 @@ function Connect-M365BaselineServicesAppOnly {
             }
         }
         catch {
-            throw "Failed to connect to $service (app-only, certificate input '$($PSCmdlet.ParameterSetName)'): $($_.Exception.Message). This is one of three distinct problems, each with a different fix - see README.md's 'App-only (certificate) authentication' section, 'Troubleshooting a connection failure' subsection: (1) the certificate has expired, was revoked, or doesn't match what's uploaded to the app registration; (2) the required API permission for $service was not granted or not admin-consented; (3) $service additionally requires a directory role assignment on the app's service principal (Exchange Administrator for ExchangeOnline, Teams Administrator for Teams) that has not been made, separate from API permissions."
+            throw "Failed to connect to $service (app-only, certificate input '$($PSCmdlet.ParameterSetName)'): $($_.Exception.Message). This is one of three distinct problems, each with a different fix - see README.md's 'App-only (certificate) authentication' section, 'Troubleshooting a connection failure' subsection: (1) the certificate has expired, was revoked, or doesn't match what's uploaded to the app registration; (2) the required API permission for $service was not granted or not admin-consented; (3) $service additionally requires a directory role assignment on the app's service principal (Exchange Administrator for ExchangeOnline, Teams Administrator for Teams, SharePoint Administrator for SharePointOnline) that has not been made, separate from API permissions."
         }
         Set-BaselineWorkloadConnectedState -Connection $service -Connected $true
     }
