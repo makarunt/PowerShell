@@ -668,6 +668,21 @@ retried interactively.
      `Get-Module Microsoft.Online.SharePoint.PowerShell -ListAvailable` and
      `Update-Module` if older.
 
+     On a smaller or newer tenant, **"Office 365 SharePoint Online" may not
+     appear at all** in the "APIs my organization uses" search - that picker
+     only lists service principals that already exist in your directory, not
+     every possible Microsoft first-party API, and a tenant that's never
+     triggered SharePoint's own service principal to be provisioned won't
+     have it yet. Create it once (interactively, as yourself, not part of the
+     app-only setup):
+     ```powershell
+     Connect-MgGraph -Scopes "Application.ReadWrite.All"
+     New-MgServicePrincipal -AppId "00000003-0000-0ff1-ce00-000000000000"
+     ```
+     (that's the well-known, fixed Application ID for "Office 365 SharePoint
+     Online" itself). Then retry the "Add a permission" search - it appears
+     immediately.
+
    Graph itself needs no separate directory-role assignment — the Application
    API permissions granted in step 3 are sufficient on their own.
 
