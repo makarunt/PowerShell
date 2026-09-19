@@ -123,6 +123,17 @@ $script:SpoChildPfxPath = $null
 # the exact operations SharePointOnlineControls.psm1 (unmodified) needs.
 $script:SpoChildServerScript = @'
 $ErrorActionPreference = "Stop"
+# Recompute PSModulePath from the User/Machine registry-level defaults,
+# discarding whatever this process inherited (normally the PS7 parent's own
+# PSModulePath, which points at .NET Core module binaries incompatible with
+# this .NET Framework runtime and breaks auto-loading of core modules like
+# Microsoft.PowerShell.Security - confirmed via real-tenant testing).
+# Belt-and-suspenders with Start-BaselineSpoChildProcess already removing it
+# from this process's environment before launch.
+$env:PSModulePath = @(
+    [System.Environment]::GetEnvironmentVariable("PSModulePath", "User")
+    [System.Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
+) -join ";"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Import-Module Microsoft.Online.SharePoint.PowerShell -ErrorAction Stop
 
@@ -228,6 +239,24 @@ function Start-BaselineSpoChildProcess {
     $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    # PowerShell 7's own PSModulePath (inherited by default, since
+    # ProcessStartInfo.EnvironmentVariables starts as a copy of this
+    # process's environment) breaks Windows PowerShell 5.1's ability to load
+    # its own built-in modules - PS7's module directories point to .NET Core
+    # binaries that aren't compatible with WinPS 5.1's .NET Framework
+    # runtime, and if they're found first, module auto-load fails with
+    # "was found... but the module could not be loaded" for core modules
+    # like Microsoft.PowerShell.Security (confirmed via real-tenant testing:
+    # ConvertTo-SecureString, called from inside this child process, failed
+    # exactly this way before this fix). Removing the inherited value lets
+    # native powershell.exe compute its own correct default on startup, the
+    # same as if it had been launched with no parent process involved at
+    # all - belt-and-suspenders with the same reset done again inside
+    # $script:SpoChildServerScript itself, in case something upstream of
+    # this process (a system-wide policy, etc.) sets it differently again.
+    if ($psi.EnvironmentVariables.ContainsKey('PSModulePath')) {
+        $psi.EnvironmentVariables.Remove('PSModulePath')
+    }
 
     $script:SpoChildProcess = [System.Diagnostics.Process]::new()
     $script:SpoChildProcess.StartInfo = $psi
