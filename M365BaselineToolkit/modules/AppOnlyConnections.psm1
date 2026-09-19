@@ -9,17 +9,36 @@
     BaselineCore.psm1 or Connect-BaselineWorkload - it is a parallel path.
     Only Invoke-M365Baseline.AppOnly.ps1 calls into this module; the
     interactive Invoke-M365Baseline.ps1 never imports it and is unaffected by
-    its existence.
+    its existence, even for the SharePoint child-process mechanism below.
 
     Design choice per the app-only work's spec: whichever certificate input
     form is given (thumbprint from a local store, a .pfx file, or a
     caller-supplied X509Certificate2 object - e.g. from Key Vault) is resolved
-    into exactly ONE X509Certificate2 object, and that same object instance is
-    passed to every Connect-* call. This avoids a documented SharePoint Online
-    Management Shell quirk where -CertificateThumbprint always looks in the
-    LocalMachine store regardless of where the certificate actually lives -
-    passing the resolved object instead of a thumbprint string sidesteps that
-    entirely for all four services, not just SharePoint.
+    into exactly ONE X509Certificate2 object, used for Graph/ExchangeOnline/
+    Teams directly.
+
+    SharePoint is a deliberate exception to "pass the same object to all four
+    services," confirmed necessary via real-tenant troubleshooting: Connect-
+    SPOService reached through Import-Module -UseWindowsPowerShell (the same
+    WinCompat mechanism the interactive script's Connect-BaselineWorkload
+    uses) fails OAuth certificate authentication even with a fully correct
+    app registration, permissions, role assignment, and a certificate proven
+    to work via a plain native Windows PowerShell 5.1 session - while the
+    exact same cert/app/permissions succeed immediately in a genuinely
+    separate, directly-spawned Windows PowerShell 5.1 process. The most
+    likely explanation is that WinCompat's DCOM-activated background host
+    process can enumerate the certificate (list/metadata access) but cannot
+    use its private key (a different, more restricted permission) under
+    whatever identity/token context that background host actually runs
+    under - separate from the calling user's own token, unlike a directly
+    spawned child process which inherits it exactly. So SharePoint gets its
+    own connection path here: a real child powershell.exe process, talking
+    to this module over a line-based JSON protocol on its stdin/stdout, with
+    Get-SPOTenant/Set-SPOTenant/Get-SPOBrowserIdleSignOut/
+    Set-SPOBrowserIdleSignOut/Disconnect-SPOService defined here as proxy
+    functions that forward to it - transparent to the unmodified
+    SharePointOnlineControls.psm1, which keeps calling those names exactly as
+    it always has, unaware anything changed underneath.
 
     See APP-ONLY-AUTH section in README.md for one-time tenant setup
     (app registration, certificate, API permissions, directory role
@@ -89,6 +108,351 @@ function Resolve-M365BaselineAppOnlyCertificate {
     }
 }
 
+# ---------------------------------------------------------------------------
+# SharePoint child-process bridge
+# ---------------------------------------------------------------------------
+
+$script:SpoChildProcess = $null
+$script:SpoChildScriptPath = $null
+$script:SpoChildPfxPath = $null
+
+# Runs inside a genuinely separate, native Windows PowerShell 5.1 process
+# (never WinCompat) - reads one JSON command per line from stdin, executes
+# the real SharePoint Online Management Shell cmdlet, writes one JSON
+# response per line to stdout. Kept deliberately tiny: it only implements
+# the exact operations SharePointOnlineControls.psm1 (unmodified) needs.
+$script:SpoChildServerScript = @'
+$ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Import-Module Microsoft.Online.SharePoint.PowerShell -ErrorAction Stop
+
+function Write-SpoResponse {
+    param($Success, $Result, $ErrorMessage)
+    $obj = @{ Success = [bool]$Success }
+    if ($Success) { $obj.Result = $Result } else { $obj.Error = [string]$ErrorMessage }
+    $json = $obj | ConvertTo-Json -Compress -Depth 6
+    [Console]::Out.WriteLine($json)
+    [Console]::Out.Flush()
+}
+
+while ($true) {
+    $line = [Console]::In.ReadLine()
+    if ($null -eq $line) { break }
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $shouldExit = $false
+    try {
+        $request = $line | ConvertFrom-Json
+        $result = $null
+        switch ($request.Command) {
+            'Connect' {
+                $p = $request.Params
+                $securePwd = ConvertTo-SecureString -String $p.CertificatePassword -AsPlainText -Force
+                Connect-SPOService -Url $p.Url -ApplicationId $p.ApplicationId -TenantId $p.TenantId `
+                    -CertificatePath $p.CertificatePath -CertificatePassword $securePwd -ErrorAction Stop
+                $result = @{ connected = $true }
+            }
+            'GetTenant' {
+                $t = Get-SPOTenant -ErrorAction Stop
+                $result = @{
+                    SharingCapability                 = [string]$t.SharingCapability
+                    DefaultSharingLinkType             = [string]$t.DefaultSharingLinkType
+                    DefaultLinkPermission              = [string]$t.DefaultLinkPermission
+                    RequireAnonymousLinksExpireInDays  = [int]$t.RequireAnonymousLinksExpireInDays
+                    LegacyAuthProtocolsEnabled         = [bool]$t.LegacyAuthProtocolsEnabled
+                }
+            }
+            'SetTenant' {
+                $setParams = @{ ErrorAction = 'Stop' }
+                foreach ($prop in $request.Params.PSObject.Properties) {
+                    $setParams[$prop.Name] = $prop.Value
+                }
+                Set-SPOTenant @setParams
+                $result = @{ ok = $true }
+            }
+            'GetIdleSignOut' {
+                $c = Get-SPOBrowserIdleSignOut -ErrorAction Stop
+                $result = @{
+                    Enabled             = [bool]$c.Enabled
+                    WarnAfterMinutes    = [int]([timespan]$c.WarnAfter).TotalMinutes
+                    SignOutAfterMinutes = [int]([timespan]$c.SignOutAfter).TotalMinutes
+                }
+            }
+            'SetIdleSignOut' {
+                Set-SPOBrowserIdleSignOut -Enabled:([bool]$request.Params.Enabled) `
+                    -WarnAfter (New-TimeSpan -Minutes ([int]$request.Params.WarnAfterMinutes)) `
+                    -SignOutAfter (New-TimeSpan -Minutes ([int]$request.Params.SignOutAfterMinutes)) `
+                    -ErrorAction Stop
+                $result = @{ ok = $true }
+            }
+            'Disconnect' {
+                Disconnect-SPOService -ErrorAction SilentlyContinue
+                $result = @{ ok = $true }
+            }
+            'Exit' {
+                $result = @{ ok = $true }
+                $shouldExit = $true
+            }
+            default {
+                throw "Unknown command: $($request.Command)"
+            }
+        }
+        Write-SpoResponse -Success $true -Result $result
+    }
+    catch {
+        Write-SpoResponse -Success $false -ErrorMessage $_.Exception.Message
+    }
+    if ($shouldExit) { break }
+}
+'@
+
+function Start-BaselineSpoChildProcess {
+    <#
+    .SYNOPSIS
+        Internal: starts (idempotently) the native Windows PowerShell 5.1
+        child process the SharePoint proxy functions talk to.
+    #>
+    [CmdletBinding()]
+    param()
+    if ($script:SpoChildProcess -and -not $script:SpoChildProcess.HasExited) { return }
+
+    $script:SpoChildScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "M365BaselineSpoChild-$([guid]::NewGuid()).ps1"
+    Set-Content -Path $script:SpoChildScriptPath -Value $script:SpoChildServerScript -Encoding utf8 -ErrorAction Stop
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = 'powershell.exe'
+    $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$($script:SpoChildScriptPath)`""
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $script:SpoChildProcess = [System.Diagnostics.Process]::new()
+    $script:SpoChildProcess.StartInfo = $psi
+    try {
+        [void]$script:SpoChildProcess.Start()
+    }
+    catch {
+        throw "Failed to start the native Windows PowerShell 5.1 child process for SharePoint (powershell.exe): $($_.Exception.Message). Windows PowerShell 5.1 must be installed (it ships with Windows by default) and 'powershell.exe' must be on PATH."
+    }
+}
+
+function Invoke-BaselineSpoChildCommand {
+    <#
+    .SYNOPSIS
+        Internal: sends one JSON command to the SharePoint child process and
+        returns its JSON result, throwing on failure or an unexpected exit.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Command,
+
+        [Parameter()]
+        [hashtable]$Params = @{}
+    )
+    if (-not $script:SpoChildProcess -or $script:SpoChildProcess.HasExited) {
+        throw "The SharePoint child process is not running. This is a bug if you've already connected to SharePointOnline this run - otherwise, connect first."
+    }
+    $request = (@{ Command = $Command; Params = $Params } | ConvertTo-Json -Compress -Depth 6)
+    $script:SpoChildProcess.StandardInput.WriteLine($request)
+    $script:SpoChildProcess.StandardInput.Flush()
+
+    $responseLine = $script:SpoChildProcess.StandardOutput.ReadLine()
+    if ($null -eq $responseLine) {
+        $stderr = $script:SpoChildProcess.StandardError.ReadToEnd()
+        throw "The SharePoint child process closed unexpectedly while handling '$Command'.$(if ($stderr) { " Stderr: $stderr" })"
+    }
+    $response = $responseLine | ConvertFrom-Json
+    if (-not $response.Success) {
+        throw [string]$response.Error
+    }
+    return $response.Result
+}
+
+function Stop-BaselineSpoChildProcess {
+    <#
+    .SYNOPSIS
+        Internal: gracefully asks the SharePoint child process to disconnect
+        and exit, then force-kills it if it doesn't within a few seconds.
+    #>
+    [CmdletBinding()]
+    param()
+    if (-not $script:SpoChildProcess -or $script:SpoChildProcess.HasExited) { return }
+    try {
+        Invoke-BaselineSpoChildCommand -Command 'Disconnect' | Out-Null
+        Invoke-BaselineSpoChildCommand -Command 'Exit' | Out-Null
+    }
+    catch {
+        Write-Verbose "Non-fatal: SharePoint child process disconnect/exit reported: $($_.Exception.Message)"
+    }
+    if (-not $script:SpoChildProcess.WaitForExit(5000)) {
+        try { $script:SpoChildProcess.Kill() } catch { }
+    }
+    $script:SpoChildProcess = $null
+    if ($script:SpoChildScriptPath -and (Test-Path -LiteralPath $script:SpoChildScriptPath)) {
+        Remove-Item -LiteralPath $script:SpoChildScriptPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:SpoChildPfxPath -and (Test-Path -LiteralPath $script:SpoChildPfxPath)) {
+        Remove-Item -LiteralPath $script:SpoChildPfxPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Best-effort cleanup if the process exits without an explicit Disconnect
+# (an earlier fatal error, Ctrl+C, etc.) so no orphaned child process or
+# temp .pfx is left behind.
+$null = Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action {
+    if ($script:SpoChildProcess -and -not $script:SpoChildProcess.HasExited) {
+        try { $script:SpoChildProcess.Kill() } catch { }
+    }
+    if ($script:SpoChildScriptPath -and (Test-Path -LiteralPath $script:SpoChildScriptPath)) {
+        Remove-Item -LiteralPath $script:SpoChildScriptPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:SpoChildPfxPath -and (Test-Path -LiteralPath $script:SpoChildPfxPath)) {
+        Remove-Item -LiteralPath $script:SpoChildPfxPath -Force -ErrorAction SilentlyContinue
+    }
+} -ErrorAction SilentlyContinue
+
+function Connect-BaselineSpoServiceViaChildProcess {
+    <#
+    .SYNOPSIS
+        Internal: starts the SharePoint child process (if needed) and
+        connects it, exporting the already-resolved certificate to a
+        short-lived temp .pfx (deleted immediately after) rather than ever
+        passing the live object or its private key across the process
+        boundary.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Url,
+
+        [Parameter(Mandatory)]
+        [string]$AppId,
+
+        [Parameter(Mandatory)]
+        [string]$TenantId,
+
+        [Parameter(Mandatory)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+    Start-BaselineSpoChildProcess
+
+    $pfxPassword = [System.Guid]::NewGuid().ToString('N')
+    $script:SpoChildPfxPath = Join-Path ([System.IO.Path]::GetTempPath()) "M365BaselineSpoCert-$([guid]::NewGuid()).pfx"
+    try {
+        $pfxBytes = $Certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $pfxPassword)
+        [System.IO.File]::WriteAllBytes($script:SpoChildPfxPath, $pfxBytes)
+
+        Invoke-BaselineSpoChildCommand -Command 'Connect' -Params @{
+            Url                   = $Url
+            ApplicationId         = $AppId
+            TenantId              = $TenantId
+            CertificatePath       = $script:SpoChildPfxPath
+            CertificatePassword   = $pfxPassword
+        } | Out-Null
+    }
+    finally {
+        if (Test-Path -LiteralPath $script:SpoChildPfxPath) {
+            Remove-Item -LiteralPath $script:SpoChildPfxPath -Force -ErrorAction SilentlyContinue
+        }
+        $script:SpoChildPfxPath = $null
+    }
+}
+
+function Get-SPOTenant {
+    <#
+    .SYNOPSIS
+        Proxy: forwards to the real Get-SPOTenant running in the SharePoint
+        child process. Defined here only so it's visible when
+        AppOnlyConnections.psm1 is imported -Global; the interactive script
+        never imports this module, so it never sees this function and keeps
+        using the real cmdlet exactly as before.
+    #>
+    [CmdletBinding()]
+    param()
+    $r = Invoke-BaselineSpoChildCommand -Command 'GetTenant'
+    return [pscustomobject]@{
+        SharingCapability                = $r.SharingCapability
+        DefaultSharingLinkType           = $r.DefaultSharingLinkType
+        DefaultLinkPermission            = $r.DefaultLinkPermission
+        RequireAnonymousLinksExpireInDays = $r.RequireAnonymousLinksExpireInDays
+        LegacyAuthProtocolsEnabled       = $r.LegacyAuthProtocolsEnabled
+    }
+}
+
+function Set-SPOTenant {
+    <#
+    .SYNOPSIS
+        Proxy: forwards to the real Set-SPOTenant running in the SharePoint
+        child process. Accepts exactly the parameters
+        SharePointOnlineControls.psm1 actually passes, one at a time.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [string]$SharingCapability,
+        [Parameter()] [string]$DefaultSharingLinkType,
+        [Parameter()] [string]$DefaultLinkPermission,
+        [Parameter()] [int]$RequireAnonymousLinksExpireInDays,
+        [Parameter()] [bool]$LegacyAuthProtocolsEnabled
+    )
+    $params = @{}
+    foreach ($key in @('SharingCapability', 'DefaultSharingLinkType', 'DefaultLinkPermission', 'RequireAnonymousLinksExpireInDays')) {
+        if ($PSBoundParameters.ContainsKey($key)) { $params[$key] = $PSBoundParameters[$key] }
+    }
+    if ($PSBoundParameters.ContainsKey('LegacyAuthProtocolsEnabled')) { $params['LegacyAuthProtocolsEnabled'] = $LegacyAuthProtocolsEnabled }
+    Invoke-BaselineSpoChildCommand -Command 'SetTenant' -Params $params | Out-Null
+}
+
+function Get-SPOBrowserIdleSignOut {
+    <#
+    .SYNOPSIS
+        Proxy: forwards to the real Get-SPOBrowserIdleSignOut running in the
+        SharePoint child process.
+    #>
+    [CmdletBinding()]
+    param()
+    $r = Invoke-BaselineSpoChildCommand -Command 'GetIdleSignOut'
+    return [pscustomobject]@{
+        Enabled     = $r.Enabled
+        WarnAfter   = [timespan]::FromMinutes($r.WarnAfterMinutes)
+        SignOutAfter = [timespan]::FromMinutes($r.SignOutAfterMinutes)
+    }
+}
+
+function Set-SPOBrowserIdleSignOut {
+    <#
+    .SYNOPSIS
+        Proxy: forwards to the real Set-SPOBrowserIdleSignOut running in the
+        SharePoint child process.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [bool]$Enabled,
+        [Parameter()] [timespan]$WarnAfter,
+        [Parameter()] [timespan]$SignOutAfter
+    )
+    Invoke-BaselineSpoChildCommand -Command 'SetIdleSignOut' -Params @{
+        Enabled             = $Enabled
+        WarnAfterMinutes    = [int]$WarnAfter.TotalMinutes
+        SignOutAfterMinutes = [int]$SignOutAfter.TotalMinutes
+    } | Out-Null
+}
+
+function Disconnect-SPOService {
+    <#
+    .SYNOPSIS
+        Proxy: gracefully shuts down the SharePoint child process. Called by
+        BaselineCore.psm1's (unmodified) Disconnect-BaselineWorkload, which
+        the app-only entry point reuses as-is.
+    #>
+    [CmdletBinding()]
+    param()
+    Stop-BaselineSpoChildProcess
+}
+
 function Connect-M365BaselineServicesAppOnly {
     <#
     .SYNOPSIS
@@ -98,8 +462,14 @@ function Connect-M365BaselineServicesAppOnly {
     .DESCRIPTION
         Resolves the given certificate input (thumbprint, .pfx file, or a
         pre-built X509Certificate2 object) into one certificate object, then
-        connects only to the services listed in -Services, passing that same
-        certificate object to every Connect-* call.
+        connects only to the services listed in -Services.
+
+        Graph, ExchangeOnline, and Teams all receive that same resolved
+        certificate object directly. SharePointOnline is the one exception:
+        it's connected via a separate native Windows PowerShell 5.1 child
+        process instead (see this file's header comment for why) - the
+        resolved certificate is exported to a short-lived temp .pfx to hand
+        to that process, never passed as a live object.
 
         Connects in the order -Services is given - callers should order it
         themselves first, e.g. via BaselineCore.psm1's exported
@@ -217,13 +587,7 @@ function Connect-M365BaselineServicesAppOnly {
                     Connect-MicrosoftTeams -ApplicationId $AppId -TenantId $TenantId -Certificate $cert -ErrorAction Stop | Out-Null
                 }
                 'SharePointOnline' {
-                    # Same -UseWindowsPowerShell -Global rationale as the interactive
-                    # Connect-BaselineWorkload in BaselineCore.psm1: this module targets
-                    # .NET Framework, not PS7's runtime, and its OAuth handling is
-                    # unreliable loaded directly into a PS7 process alongside the other
-                    # services' MSAL usage.
-                    Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -Global -ErrorAction Stop
-                    Connect-SPOService -Url $SpoAdminUrl -ApplicationId $AppId -TenantId $TenantId -Certificate $cert -ErrorAction Stop
+                    Connect-BaselineSpoServiceViaChildProcess -Url $SpoAdminUrl -AppId $AppId -TenantId $TenantId -Certificate $cert
                 }
             }
         }
@@ -235,5 +599,10 @@ function Connect-M365BaselineServicesAppOnly {
 }
 
 Export-ModuleMember -Function @(
-    'Connect-M365BaselineServicesAppOnly'
+    'Connect-M365BaselineServicesAppOnly',
+    'Get-SPOTenant',
+    'Set-SPOTenant',
+    'Get-SPOBrowserIdleSignOut',
+    'Set-SPOBrowserIdleSignOut',
+    'Disconnect-SPOService'
 )
