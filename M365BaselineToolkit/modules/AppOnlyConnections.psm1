@@ -123,16 +123,23 @@ $script:SpoChildPfxPath = $null
 # the exact operations SharePointOnlineControls.psm1 (unmodified) needs.
 $script:SpoChildServerScript = @'
 $ErrorActionPreference = "Stop"
-# Recompute PSModulePath from the User/Machine registry-level defaults,
-# discarding whatever this process inherited (normally the PS7 parent's own
-# PSModulePath, which points at .NET Core module binaries incompatible with
-# this .NET Framework runtime and breaks auto-loading of core modules like
-# Microsoft.PowerShell.Security - confirmed via real-tenant testing).
-# Belt-and-suspenders with Start-BaselineSpoChildProcess already removing it
-# from this process's environment before launch.
+# Explicitly set PSModulePath to Windows PowerShell 5.1's three standard
+# module locations, discarding whatever this process inherited (normally
+# the PS7 parent's own PSModulePath, which points at .NET Core module
+# binaries incompatible with this .NET Framework runtime and breaks
+# auto-loading of engine-intrinsic modules like Microsoft.PowerShell.Security
+# - confirmed via real-tenant testing). Built explicitly rather than reading
+# the User/Machine-scope PSModulePath registry values, since those are often
+# simply unset on a stock system (PSModulePath is normally computed at
+# session startup, not persisted to the registry) - reading unset values
+# silently produced an incomplete path that no longer included where
+# Install-Module actually puts modules for the current user, breaking
+# Import-Module Microsoft.Online.SharePoint.PowerShell (also confirmed via
+# real-tenant testing, as the direct next failure after the first fix).
 $env:PSModulePath = @(
-    [System.Environment]::GetEnvironmentVariable("PSModulePath", "User")
-    [System.Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
+    (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "WindowsPowerShell\Modules")
+    (Join-Path $env:ProgramFiles "WindowsPowerShell\Modules")
+    (Join-Path $env:windir "System32\WindowsPowerShell\v1.0\Modules")
 ) -join ";"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Import-Module Microsoft.Online.SharePoint.PowerShell -ErrorAction Stop
