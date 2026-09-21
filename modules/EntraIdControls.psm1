@@ -640,22 +640,16 @@ function Get-EntraID-AuthMethodsHardeningState {
     <#
     .SYNOPSIS
         Reads the enabled/disabled state of the Microsoft Authenticator, SMS, and
-        Voice call authentication methods, plus the tenant-level
-        systemCredentialPreferences ("system-preferred multifactor
-        authentication") setting.
+        Voice call authentication methods.
     .DESCRIPTION
-        systemCredentialPreferences.state is read from the top-level
-        authenticationMethodsPolicy resource (Get-MgPolicyAuthenticationMethodPolicy),
-        not from the per-method AuthenticationMethodConfiguration cmdlet used for
-        the other three methods - it isn't a method configuration, it's a
-        separate tenant-wide preference on the policy itself. Microsoft has been
-        gradually rolling out the sign-in-time *effect* of this setting
-        tenant-by-tenant through roughly September 2026: a tenant can show this
-        correctly configured (state = enabled) without yet visibly changing
-        sign-in prompts. That is not a configuration error and this toolkit does
-        not attempt to detect or "fix" it - see the README's "systemCredentialPreferences
-        rollout" note. The Detail field below flags it so a report reader doesn't
-        mistake it for a toolkit bug.
+        Does NOT read/report systemCredentialPreferences ("system-preferred
+        multifactor authentication"): confirmed against a real tenant, that
+        field is absent from the v1.0 Get-MgPolicyAuthenticationMethodPolicy
+        response entirely (not merely unmodeled by the installed SDK) and only
+        appears on the beta Graph endpoint - this toolkit does not call beta
+        endpoints for anything it reports as compliant/non-compliant, since
+        beta carries no stability guarantee. Dropped from this control rather
+        than worked around.
     .EXAMPLE
         Get-EntraID-AuthMethodsHardeningState
     #>
@@ -665,72 +659,54 @@ function Get-EntraID-AuthMethodsHardeningState {
     $authenticator = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId 'MicrosoftAuthenticator' -ErrorAction Stop
     $sms = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId 'Sms' -ErrorAction Stop
     $voice = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId 'Voice' -ErrorAction Stop
-    $policy = Get-MgPolicyAuthenticationMethodPolicy -ErrorAction Stop
-
-    # Confirmed against a real tenant: systemCredentialPreferences isn't
-    # modeled as a direct typed property on every installed Microsoft.Graph
-    # SDK version (it's a newer, still-rolling-out field - see this
-    # function's own .DESCRIPTION) - $policy.SystemCredentialPreferences
-    # throws "The property 'SystemCredentialPreferences' cannot be found on
-    # this object" under Set-StrictMode -Version Latest when that's the case.
-    # Get-BaselineGraphPropertyValue falls back to $policy.AdditionalProperties
-    # instead of dotting in directly.
-    $systemCredentialPreferences = Get-BaselineGraphPropertyValue -InputObject $policy -Name 'SystemCredentialPreferences'
-    $systemCredentialPreferencesState = [string](Get-BaselineGraphPropertyValue -InputObject $systemCredentialPreferences -Name 'State')
 
     $value = [pscustomobject]@{
         authenticatorEnabled = ([string]$authenticator.State -eq 'enabled')
         smsEnabled           = ([string]$sms.State -eq 'enabled')
         voiceEnabled          = ([string]$voice.State -eq 'enabled')
-        systemCredentialPreferences = [pscustomobject]@{ state = $systemCredentialPreferencesState }
     }
     return [pscustomobject]@{
         Id     = 'EntraID-AuthMethodsHardening'
         Value  = $value
-        Detail = "Microsoft has been gradually rolling out systemCredentialPreferences's sign-in-time effect tenant-by-tenant through roughly September 2026 - a compliant reading here does not guarantee sign-in behavior has visibly changed yet."
+        Detail = 'Audit-only: current authenticator/SMS/voice method states, for manual review. Not automatable - see Set-EntraID-AuthMethodsHardeningState.'
     }
 }
 
 function Set-EntraID-AuthMethodsHardeningState {
     <#
     .SYNOPSIS
-        Idempotently enables/disables the Microsoft Authenticator, SMS, and Voice
-        call authentication methods, and sets the systemCredentialPreferences
-        state.
+        Not automatable by design - always returns Skipped-Manual. Disabling
+        SMS/Voice tenant-wide can lock out any admin or user who still
+        actually relies on one of them to sign in; that call needs a human who
+        knows this tenant's users, not an unattended script. Change manually:
+        Entra admin center > Protection > Authentication methods > Policies >
+        enable Microsoft Authenticator / disable SMS and Voice call, once
+        confirmed no one still depends on them.
     .PARAMETER DesiredValue
-        Object: { authenticatorEnabled, smsEnabled, voiceEnabled: bool,
-        systemCredentialPreferences: { state: 'enabled'|'disabled' } }.
+        Ignored.
     .PARAMETER CurrentValue
-        Optional pre-fetched current value.
+        Echoed back for the log/report.
     .EXAMPLE
-        Set-EntraID-AuthMethodsHardeningState -DesiredValue ([pscustomobject]@{authenticatorEnabled=$true;smsEnabled=$false;voiceEnabled=$false;systemCredentialPreferences=@{state='enabled'}})
+        Set-EntraID-AuthMethodsHardeningState -DesiredValue $null -CurrentValue $null
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory)]
+        [Parameter()]
+        [AllowNull()]
         [object]$DesiredValue,
 
         [Parameter()]
         [AllowNull()]
         [object]$CurrentValue
     )
-    $current = if ($null -ne $CurrentValue) { $CurrentValue } else { (Get-EntraID-AuthMethodsHardeningState).Value }
-    if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
-        return [pscustomobject]@{ Id = 'EntraID-AuthMethodsHardening'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+    return [pscustomobject]@{
+        Id            = 'EntraID-AuthMethodsHardening'
+        Status        = 'Skipped-Manual'
+        PreviousValue = $CurrentValue
+        AppliedValue  = $null
+        Message       = 'Not automated: disabling SMS/Voice tenant-wide risks locking out anyone still using them. Change manually: Entra admin center > Protection > Authentication methods > Policies > enable Microsoft Authenticator / disable SMS and Voice call, once confirmed no one still depends on them.'
     }
-
-    $methodStates = @{
-        'MicrosoftAuthenticator' = [bool]$DesiredValue.authenticatorEnabled
-        'Sms'                    = [bool]$DesiredValue.smsEnabled
-        'Voice'                  = [bool]$DesiredValue.voiceEnabled
-    }
-    foreach ($methodId in $methodStates.Keys) {
-        $state = if ($methodStates[$methodId]) { 'enabled' } else { 'disabled' }
-        Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId $methodId -BodyParameter @{ '@odata.type' = "#microsoft.graph.$($methodId)AuthenticationMethodConfiguration"; state = $state } -ErrorAction Stop
-    }
-    Update-MgPolicyAuthenticationMethodPolicy -BodyParameter @{ systemCredentialPreferences = @{ state = [string]$DesiredValue.systemCredentialPreferences.state } } -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'EntraID-AuthMethodsHardening'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated MicrosoftAuthenticator/Sms/Voice method states and systemCredentialPreferences.' }
 }
 
 # ---------------------------------------------------------------------------

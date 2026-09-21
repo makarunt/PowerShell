@@ -10,59 +10,22 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../modules/BaselineCore.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot '../modules/EntraIdControls.psm1') -Force
 
-    # Resolves a dotted-path nested value out of a Graph -BodyParameter argument
-    # regardless of whether it landed as a directly-modeled property (works for a
-    # plain hashtable - the shape Set- always builds, and the shape a mocked
-    # command's -BodyParameter stays as when the real Microsoft.Graph module
-    # ISN'T installed, since Pester's mock proxy then has no typed parameter to
-    # coerce the hashtable against) or inside .AdditionalProperties (the shape it
-    # lands in when the real module IS installed and its currently-installed SDK
-    # version doesn't yet model that specific field as a typed property - observed
-    # for systemCredentialPreferences on a real workstation: PowerShell's own
-    # parameter-type coercion, triggered by Pester's mock proxy inheriting the
-    # real cmdlet's typed -BodyParameter, routes any hashtable key the typed class
-    # doesn't recognize into .AdditionalProperties instead of failing outright).
-    function Get-BaselineTestGraphBodyValue {
-        param([Parameter(Mandatory)][object]$Body, [Parameter(Mandatory)][string[]]$Path)
-        $current = $Body
-        foreach ($segment in $Path) {
-            if ($null -eq $current) { return $null }
-            if ($current -is [System.Collections.IDictionary]) {
-                # .ContainsKey(), not .Contains(): a plain Hashtable exposes both with the
-                # same (key) -> bool meaning, but the real Microsoft.Graph SDK's
-                # AdditionalProperties is a generic Dictionary<string,object>, whose
-                # PUBLIC (non-explicit) .Contains(item) overload is inherited from
-                # ICollection<KeyValuePair<TKey,TValue>> and takes a KeyValuePair, not a
-                # bare key - calling it with one string argument throws "Cannot find an
-                # overload for 'Contains' and the argument count: 1". ContainsKey(key) is
-                # the one method both Hashtable and Dictionary<TKey,TValue> expose
-                # publicly with the same single-key-argument signature.
-                if ($current.ContainsKey($segment)) { $current = $current[$segment]; continue }
-                return $null
-            }
-            $direct = $current.PSObject.Properties[$segment]
-            if ($direct) { $current = $direct.Value; continue }
-            $additional = $current.PSObject.Properties['AdditionalProperties']
-            if ($additional -and $additional.Value -is [System.Collections.IDictionary] -and $additional.Value.ContainsKey($segment)) {
-                $current = $additional.Value[$segment]
-                continue
-            }
-            return $null
-        }
-        return $current
-    }
-
-    # Companion to Get-BaselineTestGraphBodyValue: answers "was this field actually
-    # sent" rather than "what's its value" - used to prove a Set- function's
-    # -BodyParameter is a single-field PATCH that doesn't also touch a sibling
-    # field. A plain hashtable answers this with .ContainsKey() (see the .Contains()
-    # vs .ContainsKey() note on Get-BaselineTestGraphBodyValue above - the same
-    # overload-resolution trap applies here); a real typed SDK object has every
-    # property slot present regardless, so a field that was never set stays at its
-    # type's default ($null for every nullable property these Graph models use) -
-    # "not sent" there means "still null", which also matches how these SDK types
-    # serialize to the wire (a null property is omitted from the JSON body, not
-    # sent as an explicit null).
+    # Answers "was this field actually sent" rather than "what's its value" -
+    # used to prove a Set- function's -BodyParameter is a single-field PATCH
+    # that doesn't also touch a sibling field. A plain hashtable answers this
+    # with .ContainsKey() (NOT .Contains(): the real Microsoft.Graph SDK's
+    # AdditionalProperties is a generic Dictionary<string,object>, whose
+    # PUBLIC (non-explicit) .Contains(item) overload is inherited from
+    # ICollection<KeyValuePair<TKey,TValue>> and takes a KeyValuePair, not a
+    # bare key - calling it with one string argument throws "Cannot find an
+    # overload for 'Contains' and the argument count: 1". ContainsKey(key) is
+    # the one method both Hashtable and Dictionary<TKey,TValue> expose
+    # publicly with the same single-key-argument signature); a real typed SDK
+    # object has every property slot present regardless, so a field that was
+    # never set stays at its type's default ($null for every nullable
+    # property these Graph models use) - "not sent" there means "still null",
+    # which also matches how these SDK types serialize to the wire (a null
+    # property is omitted from the JSON body, not sent as an explicit null).
     function Test-BaselineTestGraphBodyHasField {
         param([Parameter(Mandatory)][object]$Body, [Parameter(Mandatory)][string]$Name)
         if ($Body -is [System.Collections.IDictionary]) { return $Body.ContainsKey($Name) }
@@ -155,10 +118,10 @@ Describe 'EntraID-GlobalAdminCount (audit-only)' {
     }
 }
 
-Describe 'EntraID-AuthMethodsHardening' {
+Describe 'EntraID-AuthMethodsHardening (audit-only; not automatable by design)' {
 
     Context 'Get-EntraID-AuthMethodsHardeningState' {
-        It 'assembles authenticator/sms/voice/systemCredentialPreferences state' {
+        It 'assembles authenticator/sms/voice state' {
             Mock -CommandName Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -ModuleName EntraIdControls -MockWith {
                 param($AuthenticationMethodConfigurationId)
                 switch ($AuthenticationMethodConfigurationId) {
@@ -167,77 +130,27 @@ Describe 'EntraID-AuthMethodsHardening' {
                     'Voice' { [pscustomobject]@{ State = 'disabled' } }
                 }
             }
-            Mock -CommandName Get-MgPolicyAuthenticationMethodPolicy -ModuleName EntraIdControls -MockWith {
-                [pscustomobject]@{ SystemCredentialPreferences = [pscustomobject]@{ State = 'enabled' } }
-            }
 
             $result = Get-EntraID-AuthMethodsHardeningState
             $result.Value.authenticatorEnabled | Should -Be $true
             $result.Value.smsEnabled | Should -Be $false
             $result.Value.voiceEnabled | Should -Be $false
-            $result.Value.systemCredentialPreferences.state | Should -Be 'enabled'
-            $result.Detail | Should -Match 'September 2026'
-        }
-
-        It 'resolves systemCredentialPreferences via AdditionalProperties when the installed Graph SDK does not model it as a direct property (regression test - confirmed live against a real tenant)' {
-            Mock -CommandName Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -ModuleName EntraIdControls -MockWith {
-                param($AuthenticationMethodConfigurationId)
-                [pscustomobject]@{ State = 'enabled' }
-            }
-            # No SystemCredentialPreferences property at all here - only
-            # AdditionalProperties, exactly like the real Microsoft.Graph SDK
-            # model when it doesn't (yet) recognize this still-rolling-out
-            # field: Set-StrictMode -Version Latest turned a direct
-            # $policy.SystemCredentialPreferences access into a hard error
-            # against a real tenant even though every mocked Pester test
-            # (including the one above) passed, since a plain pscustomobject
-            # mock always exposes whatever property you set on it directly.
-            $nestedAdditional = [System.Collections.Generic.Dictionary[string, object]]::new()
-            $nestedAdditional['state'] = 'enabled'
-            $additionalProperties = [System.Collections.Generic.Dictionary[string, object]]::new()
-            $additionalProperties['systemCredentialPreferences'] = $nestedAdditional
-            Mock -CommandName Get-MgPolicyAuthenticationMethodPolicy -ModuleName EntraIdControls -MockWith {
-                [pscustomobject]@{ AdditionalProperties = $additionalProperties }
-            }
-
-            $result = Get-EntraID-AuthMethodsHardeningState
-            $result.Value.systemCredentialPreferences.state | Should -Be 'enabled'
         }
     }
 
     Context 'Set-EntraID-AuthMethodsHardeningState' {
-        It 'updates all three method configurations AND systemCredentialPreferences when non-compliant' {
-            Mock -CommandName Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -ModuleName EntraIdControls -MockWith { }
-            Mock -CommandName Update-MgPolicyAuthenticationMethodPolicy -ModuleName EntraIdControls -MockWith { }
-
-            $current = [pscustomobject]@{ authenticatorEnabled = $false; smsEnabled = $true; voiceEnabled = $true; systemCredentialPreferences = @{ state = 'disabled' } }
-            $desired = [pscustomobject]@{ authenticatorEnabled = $true; smsEnabled = $false; voiceEnabled = $false; systemCredentialPreferences = @{ state = 'enabled' } }
+        It 'never calls any mutating Graph cmdlet and always returns Skipped-Manual' {
+            # Deliberately not automatable: disabling SMS/Voice tenant-wide
+            # risks locking out an admin or user who still relies on one of
+            # them to sign in - that call needs a human, not an unattended
+            # script. Same pattern as EntraID-GaNotLocalAdminOnJoin below.
+            $desired = [pscustomobject]@{ authenticatorEnabled = $true; smsEnabled = $false; voiceEnabled = $false }
+            $current = [pscustomobject]@{ authenticatorEnabled = $false; smsEnabled = $true; voiceEnabled = $true }
 
             $result = Set-EntraID-AuthMethodsHardeningState -DesiredValue $desired -CurrentValue $current
 
-            $result.Status | Should -Be 'Success'
-            Should -Invoke -CommandName Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -ModuleName EntraIdControls -Times 3
-            # See Get-BaselineTestGraphBodyValue in this file's BeforeAll: systemCredentialPreferences
-            # isn't (as of this writing) a typed property on every installed Microsoft.Graph SDK
-            # version, so it can land under $BodyParameter.AdditionalProperties instead of directly
-            # on $BodyParameter - a plain $BodyParameter.systemCredentialPreferences.state check
-            # would silently fail against a real Microsoft.Graph install even though the toolkit's
-            # actual call is correct.
-            Should -Invoke -CommandName Update-MgPolicyAuthenticationMethodPolicy -ModuleName EntraIdControls -Times 1 -ParameterFilter {
-                (Get-BaselineTestGraphBodyValue -Body $BodyParameter -Path 'systemCredentialPreferences', 'state') -eq 'enabled'
-            }
-        }
-
-        It 'is a no-op when already compliant (including systemCredentialPreferences)' {
-            Mock -CommandName Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -ModuleName EntraIdControls -MockWith { }
-            Mock -CommandName Update-MgPolicyAuthenticationMethodPolicy -ModuleName EntraIdControls -MockWith { }
-
-            $same = [pscustomobject]@{ authenticatorEnabled = $true; smsEnabled = $false; voiceEnabled = $false; systemCredentialPreferences = @{ state = 'enabled' } }
-            $result = Set-EntraID-AuthMethodsHardeningState -DesiredValue $same -CurrentValue $same
-
-            $result.Message | Should -Match 'Already compliant'
-            Should -Invoke -CommandName Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -ModuleName EntraIdControls -Times 0
-            Should -Invoke -CommandName Update-MgPolicyAuthenticationMethodPolicy -ModuleName EntraIdControls -Times 0
+            $result.Status | Should -Be 'Skipped-Manual'
+            $result.Message | Should -Match 'Entra admin center'
         }
     }
 }
