@@ -247,8 +247,19 @@ function Get-BaselineCAAdminRoleTemplateIds {
     if (-not $Refresh -and $script:CAAdminRoleIdCache) {
         return $script:CAAdminRoleIdCache
     }
-    $templates = @(Get-MgDirectoryRoleTemplate -All -ErrorAction Stop | Where-Object { $script:CAAdminRoleDisplayNames -contains $_.DisplayName })
-    $resolvedNames = @($templates.DisplayName)
+    # The "$_ -and" guard defends against a stray null entry in the pipeline
+    # (harmless either way). The real bug this whole block works around:
+    # Set-StrictMode -Version Latest throws "The property 'DisplayName' cannot
+    # be found on this object" on $templates.DisplayName member-enumeration
+    # when $templates is a genuinely EMPTY array - confirmed directly, this is
+    # not limited to $null elements. That's exactly the shape a tenant missing
+    # one of these roles (or a test mocking Get-MgDirectoryRoleTemplate to
+    # return none) produces, which without this fix crashes before ever
+    # reaching this function's own, more useful "could not resolve" error
+    # below. ForEach-Object -Property, unlike dotted member-enumeration, never
+    # touches .DisplayName at all when there are zero elements to iterate.
+    $templates = @(Get-MgDirectoryRoleTemplate -All -ErrorAction Stop | Where-Object { $_ -and ($script:CAAdminRoleDisplayNames -contains [string]$_.DisplayName) })
+    $resolvedNames = @($templates | ForEach-Object { [string]$_.DisplayName })
     $missing = @($script:CAAdminRoleDisplayNames | Where-Object { $resolvedNames -notcontains $_ })
     if ($missing.Count -gt 0) {
         throw "CA-RequireMfaAdminRoles: could not resolve directory role template(s) via Get-MgDirectoryRoleTemplate: $($missing -join ', '). These are expected to be standard Entra ID built-in roles - verify they exist in this tenant."

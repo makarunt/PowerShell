@@ -91,7 +91,12 @@ function Get-EntraID-GlobalAdminCountState {
         throw "The Global Administrator directory role is not activated in this tenant (Get-MgDirectoryRole returned no match)."
     }
     $members = @(Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -All -ErrorAction Stop)
-    return [pscustomobject]@{ Id = 'EntraID-GlobalAdminCount'; Value = $members.Count; Detail = ($members.Id -join ', ') }
+    # Member-enumeration ($members.Id) throws under Set-StrictMode -Version
+    # Latest when $members is a genuinely empty array (confirmed directly) -
+    # a legitimate shape here (a role with zero current members). ForEach-Object
+    # never touches .Id at all when there's nothing to iterate.
+    $memberIds = @($members | ForEach-Object { [string]$_.Id })
+    return [pscustomobject]@{ Id = 'EntraID-GlobalAdminCount'; Value = $members.Count; Detail = ($memberIds -join ', ') }
 }
 
 function Set-EntraID-GlobalAdminCountState {
