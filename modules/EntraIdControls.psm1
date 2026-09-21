@@ -667,11 +667,22 @@ function Get-EntraID-AuthMethodsHardeningState {
     $voice = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId 'Voice' -ErrorAction Stop
     $policy = Get-MgPolicyAuthenticationMethodPolicy -ErrorAction Stop
 
+    # Confirmed against a real tenant: systemCredentialPreferences isn't
+    # modeled as a direct typed property on every installed Microsoft.Graph
+    # SDK version (it's a newer, still-rolling-out field - see this
+    # function's own .DESCRIPTION) - $policy.SystemCredentialPreferences
+    # throws "The property 'SystemCredentialPreferences' cannot be found on
+    # this object" under Set-StrictMode -Version Latest when that's the case.
+    # Get-BaselineGraphPropertyValue falls back to $policy.AdditionalProperties
+    # instead of dotting in directly.
+    $systemCredentialPreferences = Get-BaselineGraphPropertyValue -InputObject $policy -Name 'SystemCredentialPreferences'
+    $systemCredentialPreferencesState = [string](Get-BaselineGraphPropertyValue -InputObject $systemCredentialPreferences -Name 'State')
+
     $value = [pscustomobject]@{
         authenticatorEnabled = ([string]$authenticator.State -eq 'enabled')
         smsEnabled           = ([string]$sms.State -eq 'enabled')
         voiceEnabled          = ([string]$voice.State -eq 'enabled')
-        systemCredentialPreferences = [pscustomobject]@{ state = [string]$policy.SystemCredentialPreferences.State }
+        systemCredentialPreferences = [pscustomobject]@{ state = $systemCredentialPreferencesState }
     }
     return [pscustomobject]@{
         Id     = 'EntraID-AuthMethodsHardening'
