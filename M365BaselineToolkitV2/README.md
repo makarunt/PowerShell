@@ -38,7 +38,6 @@ None of this touches v1 - see `VERSIONS.md`.
 
 | Control | New field(s) |
 |---|---|
-| `EntraID-AuthMethodsHardening` | `systemCredentialPreferences: { state }` — Microsoft has been gradually rolling out this setting's sign-in-time *effect* tenant-by-tenant through roughly September 2026; a tenant showing this configured but not yet visibly affecting sign-in behavior is not a configuration error. |
 | `Teams-BlockConsumerContact` | `externalAccessWithTrialTenants` — Microsoft made `"Blocked"` the tenant-wide default starting July 29, 2024, so this may already read compliant on many tenants; it's still asserted explicitly rather than relying on the inherited default. |
 | `Teams-MeetingJoinDefaults` | `allowAnonymousUsersToStartMeeting`, `allowPSTNUsersToBypassLobby` |
 
@@ -486,19 +485,31 @@ their column instead. A scrollable wrapper around the table is still there as
 a safety net for a genuinely unbreakable value (a long token with no spaces),
 so only the table scrolls in that rare case, never the whole page.
 
-`EntraID-AuthMethodsHardening` and `EntraID-MfaRegistrationCampaign` **are**
-implemented as automatable, but Microsoft has changed the nested request-body
-shape for `Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration`
-and `Update-MgPolicyAuthenticationMethodPolicy` before. Validate the body
+`EntraID-MfaRegistrationCampaign` **is** implemented as automatable, but
+Microsoft has changed the nested request-body shape for
+`Update-MgPolicyAuthenticationMethodPolicy` before. Validate the body
 parameter shape in this toolkit's `EntraIdControls.psm1` against the
 `Microsoft.Graph.Identity.SignIns` module version you have installed before
-relying on these two in production — a schema drift here would surface as an
+relying on it in production — a schema drift here would surface as an
 `Update-*` cmdlet error (a `Failed` result in Apply's output), not a silent
-no-op, but it's worth checking ahead of time. Note that `EntraID-MfaRegistrationCampaign`'s
+no-op, but it's worth checking ahead of time. Note that its
 `desiredValue.includeTargets` is required by the Graph API (the campaign has
 no effect with zero targets) — the seed config uses the documented
 `"all_users"` special group id to target everyone; replace it with a specific
 group id under `includeTargets` if you'd rather pilot with a subset first.
+
+`EntraID-AuthMethodsHardening` (Authenticator/SMS/Voice method states) is
+deliberately **not** automatable, unlike most controls in this toolkit:
+disabling SMS/Voice tenant-wide risks locking out an admin or user who still
+relies on one of them to sign in, which needs a human who knows this
+tenant's users, not an unattended script. `Set-EntraID-AuthMethodsHardeningState`
+always returns `Skipped-Manual`; Audit still reports drift so you know it
+needs a look, but Apply never touches it. Its `desiredValue` also
+deliberately excludes `systemCredentialPreferences` ("system-preferred
+multifactor authentication") — confirmed against a real tenant, that field
+is absent from the v1.0 `Get-MgPolicyAuthenticationMethodPolicy` response
+entirely and only exists on the beta Graph endpoint, which this toolkit
+does not call for anything it reports compliance on.
 
 Two other real-tenant findings worth knowing about, both already fixed in
 this toolkit's code but worth being aware of if you're extending it further:
@@ -667,9 +678,9 @@ Invoke-Pester -Path ./tests
   idempotent no-op path and the DKIM empty-domain-list guard.
   `EntraIdControls.Tests.ps1` also covers all three v2-new/extended EntraID
   controls (`AdminConsentWorkflow` including its empty-reviewers hard-fail,
-  `GaNotLocalAdminOnJoin`, the `systemCredentialPreferences` extension to
-  `AuthMethodsHardening`) and the `BlockSelfServiceAppCreation`/
-  `BlockSelfServiceSecurityGroupCreation` overlap decision above.
+  `GaNotLocalAdminOnJoin`, `AuthMethodsHardening`'s Skipped-Manual behavior)
+  and the `BlockSelfServiceAppCreation`/`BlockSelfServiceSecurityGroupCreation`
+  overlap decision above.
 - `SharePointOnlineControls.Tests.ps1` / `TeamsControls.Tests.ps1` — new in
   v2: the four new SharePoint controls, the two extended Teams controls (with
   explicit field-preservation assertions confirming the extension didn't

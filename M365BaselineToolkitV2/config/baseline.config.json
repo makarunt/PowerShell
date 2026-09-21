@@ -73,9 +73,10 @@
       "id": "EntraID-AuthMethodsHardening",
       "workload": "EntraID",
       "enabled": true,
-      "automatable": true,
-      "desiredValue": { "authenticatorEnabled": true, "smsEnabled": false, "voiceEnabled": false, "systemCredentialPreferences": { "state": "enabled" } },
-      "description": "Microsoft Authenticator is enabled as an authentication method while SMS and voice call methods are disabled tenant-wide, and system-preferred multifactor authentication (systemCredentialPreferences) is enabled. NOTE: Microsoft has been gradually rolling out this setting's sign-in-time effect tenant-by-tenant through roughly September 2026 - a tenant showing this configured but not yet visibly affecting sign-in prompts is not a configuration error."
+      "automatable": false,
+      "desiredValue": { "authenticatorEnabled": true, "smsEnabled": false, "voiceEnabled": false },
+      "description": "Microsoft Authenticator is enabled as an authentication method while SMS and voice call methods are disabled tenant-wide. Not automatable: disabling SMS/Voice tenant-wide can lock out an admin or user who still relies on one of them to sign in - review manually before changing.",
+      "manualInstructions": "Entra admin center > Protection > Authentication methods > Policies > enable Microsoft Authenticator / disable SMS and Voice call, once confirmed no one still depends on them."
     },
     {
       "id": "EntraID-AdminConsentWorkflow",
