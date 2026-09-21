@@ -456,6 +456,26 @@ as of this writing, so their Audit report shows `Current: (none)` /
 fabricates a reading it can't back with a real API call.
 `EntraID-AdminPasswordResetNotification` is the same way as of this writing.
 
+**These controls are highlighted everywhere v2 tells you about them - new in
+v2** (v1 only ever mixed a `Manual: ...` note into a table cell you'd have to
+scroll to find):
+
+- **Console.** Audit, Apply, *and* Restore all print a `⚠ Manual review
+  required` block right after the run summary, listing every such control by
+  id with its exact fix-it-by-hand instructions, in yellow. Previously only
+  Apply printed anything like this, and even then without a warning marker.
+- **Markdown report.** A `## ⚠ Manual review required` section appears near
+  the top, before the full table, with the same list. Each one's row further
+  down in the table also has its Id bolded and prefixed with `⚠`, so it's
+  visible while scanning the table alone, not just the summary at the top.
+- **HTML report.** The same summary appears as a highlighted callout box, and
+  every such control's table row gets an amber background (CSS class
+  `manual-row`) plus the same `⚠` prefix on its Id cell.
+
+None of this changes what gets applied or skipped — it's purely about making
+sure "this one needs a human" is impossible to miss, whether you're watching
+the console, skimming a report's top, or reading the full table.
+
 `EntraID-AuthMethodsHardening` and `EntraID-MfaRegistrationCampaign` **are**
 implemented as automatable, but Microsoft has changed the nested request-body
 shape for `Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration`
@@ -661,7 +681,10 @@ Invoke-Pester -Path ./tests
   `mechanismPossiblyDeprecated` flag, a genuine thrown `Set-` error staying
   `Failed` and never reaching the helper at all, and StrictMode-safety
   against a hand-built catalog entry with no `MechanismPossiblyDeprecated`
-  property.
+  property. Also new in v2: a block of tests for the manual-review report
+  highlighting described under "`Automatable: false` controls" above -
+  summary section present/absent, and row-level `⚠`/`manual-row` marking, in
+  both the Markdown and HTML report.
 - `V1Integrity.Tests.ps1` — new in v2, the mechanical proof that v1 is
   untouched: re-hashes every file `../M365BaselineToolkit` (v1) currently has
   against `v1-baseline-hashes.json` (captured via `git ls-files | Get-FileHash`

@@ -268,6 +268,104 @@ Describe 'Test-BaselineApplyOutcome (generic read-back-and-classify helper)' {
     }
 }
 
+Describe 'Manual-review highlighting in reports' {
+
+    BeforeAll {
+        $script:ManualReviewAuditResults = @(
+            [pscustomobject]@{ Id = 'EntraID-AutoControl'; Workload = 'EntraID'; Description = 'auto'; Automatable = $true; CurrentValue = $true; DesiredValue = $true; Compliant = $true; ManualInstructions = ''; Detail = $null; Error = $null }
+            [pscustomobject]@{ Id = 'EntraID-GaNotLocalAdminOnJoin'; Workload = 'EntraID'; Description = 'manual1'; Automatable = $false; CurrentValue = $null; DesiredValue = $true; Compliant = $null; ManualInstructions = 'Entra admin center > Identity > Devices > Device settings'; Detail = 'no api'; Error = $null }
+            [pscustomobject]@{ Id = 'M365AdminCenter-SwayExternalSharing'; Workload = 'M365AdminCenter'; Description = 'manual2'; Automatable = $false; CurrentValue = $null; DesiredValue = $false; Compliant = $null; ManualInstructions = 'M365 admin center > Org settings > Sway'; Detail = 'no api'; Error = $null }
+        )
+    }
+
+    Context 'Export-BaselineMarkdownReport' {
+        It 'adds a top-of-report summary section listing every manual-review control with its instructions' {
+            $path = [System.IO.Path]::GetTempFileName()
+            try {
+                Export-BaselineMarkdownReport -AuditResults $script:ManualReviewAuditResults -Path $path -Title 'Test' | Out-Null
+                $content = Get-Content $path -Raw
+                $content | Should -Match 'Manual review required: 2'
+                $content | Should -Match 'Manual review required\r?\n'
+                $content | Should -Match '\*\*EntraID-GaNotLocalAdminOnJoin\*\*.*Device settings'
+                $content | Should -Match '\*\*M365AdminCenter-SwayExternalSharing\*\*.*Org settings'
+            }
+            finally {
+                Remove-Item $path -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'marks each manual-review control''s row (not just automatable ones) with a warning prefix on its Id' {
+            $path = [System.IO.Path]::GetTempFileName()
+            try {
+                Export-BaselineMarkdownReport -AuditResults $script:ManualReviewAuditResults -Path $path -Title 'Test' | Out-Null
+                $content = Get-Content $path -Raw
+                $content | Should -Match '\*\*EntraID-GaNotLocalAdminOnJoin\*\* \|'
+                $content | Should -Not -Match '\*\*EntraID-AutoControl\*\*'
+            }
+            finally {
+                Remove-Item $path -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'omits the summary section entirely when there are no manual-review controls' {
+            $path = [System.IO.Path]::GetTempFileName()
+            try {
+                $onlyAuto = @($script:ManualReviewAuditResults | Where-Object Automatable)
+                Export-BaselineMarkdownReport -AuditResults $onlyAuto -Path $path -Title 'Test' | Out-Null
+                $content = Get-Content $path -Raw
+                $content | Should -Not -Match 'Manual review required\r?\n'
+                $content | Should -Match 'Manual review required: 0'
+            }
+            finally {
+                Remove-Item $path -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    Context 'Export-BaselineHtmlReport' {
+        It 'adds a manual-summary callout div listing every manual-review control' {
+            $path = [System.IO.Path]::GetTempFileName()
+            try {
+                Export-BaselineHtmlReport -AuditResults $script:ManualReviewAuditResults -Path $path -Title 'Test' | Out-Null
+                $content = Get-Content $path -Raw
+                $content | Should -Match '<div class="manual-summary">'
+                $content | Should -Match 'EntraID-GaNotLocalAdminOnJoin'
+                $content | Should -Match 'M365AdminCenter-SwayExternalSharing'
+            }
+            finally {
+                Remove-Item $path -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'applies the manual-row CSS class to exactly the non-automatable rows' {
+            $path = [System.IO.Path]::GetTempFileName()
+            try {
+                Export-BaselineHtmlReport -AuditResults $script:ManualReviewAuditResults -Path $path -Title 'Test' | Out-Null
+                $content = Get-Content $path -Raw
+                $manualRowCount = ([regex]::Matches($content, 'class="manual-row"')).Count
+                $manualRowCount | Should -Be 2
+            }
+            finally {
+                Remove-Item $path -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'omits the manual-summary div and manual-row class entirely when there are no manual-review controls' {
+            $path = [System.IO.Path]::GetTempFileName()
+            try {
+                $onlyAuto = @($script:ManualReviewAuditResults | Where-Object Automatable)
+                Export-BaselineHtmlReport -AuditResults $onlyAuto -Path $path -Title 'Test' | Out-Null
+                $content = Get-Content $path -Raw
+                $content | Should -Not -Match '<div class="manual-summary">'
+                $content | Should -Not -Match 'class="manual-row"'
+            }
+            finally {
+                Remove-Item $path -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 Describe 'Snapshot schema version enforcement' {
 
     It 'refuses to load a snapshot with an unsupported snapshotSchemaVersion' {
