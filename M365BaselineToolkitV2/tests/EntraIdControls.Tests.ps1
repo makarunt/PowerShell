@@ -178,6 +178,31 @@ Describe 'EntraID-AuthMethodsHardening' {
             $result.Value.systemCredentialPreferences.state | Should -Be 'enabled'
             $result.Detail | Should -Match 'September 2026'
         }
+
+        It 'resolves systemCredentialPreferences via AdditionalProperties when the installed Graph SDK does not model it as a direct property (regression test - confirmed live against a real tenant)' {
+            Mock -CommandName Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -ModuleName EntraIdControls -MockWith {
+                param($AuthenticationMethodConfigurationId)
+                [pscustomobject]@{ State = 'enabled' }
+            }
+            # No SystemCredentialPreferences property at all here - only
+            # AdditionalProperties, exactly like the real Microsoft.Graph SDK
+            # model when it doesn't (yet) recognize this still-rolling-out
+            # field: Set-StrictMode -Version Latest turned a direct
+            # $policy.SystemCredentialPreferences access into a hard error
+            # against a real tenant even though every mocked Pester test
+            # (including the one above) passed, since a plain pscustomobject
+            # mock always exposes whatever property you set on it directly.
+            $nestedAdditional = [System.Collections.Generic.Dictionary[string, object]]::new()
+            $nestedAdditional['state'] = 'enabled'
+            $additionalProperties = [System.Collections.Generic.Dictionary[string, object]]::new()
+            $additionalProperties['systemCredentialPreferences'] = $nestedAdditional
+            Mock -CommandName Get-MgPolicyAuthenticationMethodPolicy -ModuleName EntraIdControls -MockWith {
+                [pscustomobject]@{ AdditionalProperties = $additionalProperties }
+            }
+
+            $result = Get-EntraID-AuthMethodsHardeningState
+            $result.Value.systemCredentialPreferences.state | Should -Be 'enabled'
+        }
     }
 
     Context 'Set-EntraID-AuthMethodsHardeningState' {

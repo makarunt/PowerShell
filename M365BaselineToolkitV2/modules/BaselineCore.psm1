@@ -549,6 +549,76 @@ function Get-BaselinePropertyMap {
     return $map
 }
 
+function Get-BaselineGraphPropertyValue {
+    <#
+    .SYNOPSIS
+        Reads a property from a Microsoft Graph SDK model object, falling back
+        to its AdditionalProperties dictionary if the installed SDK version
+        doesn't (yet) model that field as a typed property.
+    .DESCRIPTION
+        Confirmed against a real tenant: some Graph resource fields (e.g.
+        authenticationMethodsPolicy's systemCredentialPreferences, a
+        relatively new field still being rolled out) aren't modeled as a
+        direct typed .NET property on every installed Microsoft.Graph SDK
+        version - the SDK's generated model classes route any field they
+        don't recognize into an AdditionalProperties dictionary instead,
+        keyed by the raw (camelCase) Graph field name. Under
+        Set-StrictMode -Version Latest, a direct .<Name> access throws "The
+        property '<Name>' cannot be found on this object" in exactly that
+        case rather than quietly returning $null. Every Get-<Control>State
+        function that reads a field newer than "core" should go through this
+        rather than dotting into the SDK object directly.
+
+        Checked in order: (1) a direct typed property named $Name (works
+        whether $InputObject is a real SDK model, a hashtable, or a plain
+        PSCustomObject - e.g. a test's mocked return value); (2)
+        AdditionalProperties[$AdditionalPropertiesName] if present. Returns
+        $null if $InputObject itself is $null, or the field isn't found either
+        way.
+    .PARAMETER InputObject
+        The object to read from.
+    .PARAMETER Name
+        The direct property name to look for first (PascalCase, matching the
+        SDK model's .NET property naming - e.g. 'SystemCredentialPreferences').
+    .PARAMETER AdditionalPropertiesName
+        The AdditionalProperties dictionary key to fall back to (camelCase, as
+        Graph's own JSON/OpenAPI names it - e.g. 'systemCredentialPreferences').
+        Defaults to $Name with its first character lowercased, which covers
+        every field in this toolkit so far.
+    .EXAMPLE
+        Get-BaselineGraphPropertyValue -InputObject $policy -Name 'SystemCredentialPreferences'
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [object]$InputObject,
+
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [Parameter()]
+        [string]$AdditionalPropertiesName
+    )
+    if ($null -eq $InputObject) { return $null }
+    if (-not $AdditionalPropertiesName) {
+        $AdditionalPropertiesName = if ($Name.Length -gt 0) { $Name.Substring(0, 1).ToLowerInvariant() + $Name.Substring(1) } else { $Name }
+    }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.ContainsKey($Name)) { return $InputObject[$Name] }
+        if ($InputObject.ContainsKey($AdditionalPropertiesName)) { return $InputObject[$AdditionalPropertiesName] }
+        return $null
+    }
+    $direct = $InputObject.PSObject.Properties[$Name]
+    if ($direct) { return $direct.Value }
+    $additional = $InputObject.PSObject.Properties['AdditionalProperties']
+    if ($additional -and $additional.Value -is [System.Collections.IDictionary] -and $additional.Value.ContainsKey($AdditionalPropertiesName)) {
+        return $additional.Value[$AdditionalPropertiesName]
+    }
+    return $null
+}
+
 function Test-BaselineApplyOutcome {
     <#
     .SYNOPSIS
@@ -1983,6 +2053,7 @@ Export-ModuleMember -Function @(
     'Test-TenantServicePlan'
     'Compare-BaselineValueDeep'
     'Get-BaselinePropertyMap'
+    'Get-BaselineGraphPropertyValue'
     'Test-BaselineCompliance'
     'Test-BaselineApplyOutcome'
     'Test-BaselineRequiredModule'
