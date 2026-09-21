@@ -459,8 +459,21 @@ function Compare-BaselineValueDeep {
     if ($null -eq $Left -and $null -eq $Right) { return $true }
     if ($null -eq $Left -or $null -eq $Right) { return $false }
 
-    $leftIsCollection = ($Left -is [System.Collections.IEnumerable]) -and (-not ($Left -is [string]))
-    $rightIsCollection = ($Right -is [System.Collections.IEnumerable]) -and (-not ($Right -is [string]))
+    # A Hashtable (and any other IDictionary) is ALSO IEnumerable in .NET, but for this
+    # function's purposes it's a keyed object (JSON "{}"), not an array (JSON "[]") -
+    # it must be excluded here so it falls through to the isObject branch below instead
+    # of this collection branch. Without this exclusion, comparing two hashtables (e.g.
+    # a control's desiredValue containing a raw @{...} literal instead of a
+    # [pscustomobject]@{...}) recurses forever: @($hashtable) just wraps the SAME
+    # hashtable back into a 1-element array containing itself, so the recursive
+    # per-element compare below calls Compare-BaselineValueDeep with the exact same two
+    # hashtable arguments again, forever, until PowerShell's call-depth limit throws a
+    # ScriptCallDepthException - confirmed live via a real Pester run against
+    # EntraID-AuthMethodsHardening's systemCredentialPreferences field (a nested
+    # hashtable in the test's desired/current values), which hung for over five minutes
+    # before erroring out.
+    $leftIsCollection = ($Left -is [System.Collections.IEnumerable]) -and (-not ($Left -is [string])) -and (-not ($Left -is [System.Collections.IDictionary]))
+    $rightIsCollection = ($Right -is [System.Collections.IEnumerable]) -and (-not ($Right -is [string])) -and (-not ($Right -is [System.Collections.IDictionary]))
 
     if ($leftIsCollection -and $rightIsCollection) {
         $leftArr = @($Left)

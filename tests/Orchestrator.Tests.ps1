@@ -47,6 +47,51 @@ Describe 'Compliance diffing (Test-BaselineCompliance / Compare-BaselineValueDee
         Test-BaselineCompliance -CurrentValue 6 -DesiredValue @{ min = 2; max = 4 } -ComplianceMode Range | Should -Be $false
         Test-BaselineCompliance -CurrentValue 1 -DesiredValue @{ min = 2; max = 4 } -ComplianceMode Range | Should -Be $false
     }
+
+    Context 'Hashtable values (not just PSCustomObject) - regression test for a real infinite-recursion bug' {
+        # A Hashtable is ALSO [System.Collections.IEnumerable] in .NET, same as an array.
+        # Comparing two hashtables used to recurse forever: @($hashtable) just wraps the
+        # SAME hashtable back into a 1-element array containing itself, so the recursive
+        # per-element compare called Compare-BaselineValueDeep with the identical two
+        # hashtable arguments again, forever, until a ScriptCallDepthException. Caught by
+        # a real Pester run on a live workstation (EntraID-AuthMethodsHardening's
+        # systemCredentialPreferences test, using a nested hashtable, hung for 5+ minutes
+        # before erroring). Timeout-guarded here so a regression fails fast, not by hanging.
+
+        It 'compares two equal hashtables as compliant, quickly (does not recurse forever)' {
+            $job = Start-Job -ScriptBlock {
+                param($modulePath)
+                Import-Module $modulePath -Force
+                Compare-BaselineValueDeep -Left @{ state = 'enabled' } -Right @{ state = 'enabled' }
+            } -ArgumentList (Join-Path $PSScriptRoot '../modules/BaselineCore.psm1')
+            $completed = Wait-Job -Job $job -Timeout 10
+            if (-not $completed) { Stop-Job -Job $job; Remove-Job -Job $job -Force; throw "Compare-BaselineValueDeep did not return within 10 seconds - infinite recursion regression." }
+            $result = Receive-Job -Job $job
+            Remove-Job -Job $job -Force
+            $result | Should -Be $true
+        }
+
+        It 'compares two different hashtables as non-compliant' {
+            Compare-BaselineValueDeep -Left @{ state = 'enabled' } -Right @{ state = 'disabled' } | Should -Be $false
+        }
+
+        It 'compares a hashtable and a PSCustomObject with equivalent content as equal' {
+            Compare-BaselineValueDeep -Left @{ state = 'enabled' } -Right ([pscustomobject]@{ state = 'enabled' }) | Should -Be $true
+        }
+
+        It 'compares a hashtable nested inside a PSCustomObject (the exact shape that triggered the bug)' {
+            $same = [pscustomobject]@{ authenticatorEnabled = $true; systemCredentialPreferences = @{ state = 'enabled' } }
+            Compare-BaselineValueDeep -Left $same -Right $same | Should -Be $true
+        }
+
+        It 'still compares an array of hashtables correctly (e.g. MfaRegistrationCampaign includeTargets)' {
+            $targets1 = @(@{ targetType = 'group'; id = 'all_users' })
+            $targets2 = @(@{ targetType = 'group'; id = 'all_users' })
+            $targets3 = @(@{ targetType = 'group'; id = 'different' })
+            Compare-BaselineValueDeep -Left $targets1 -Right $targets2 | Should -Be $true
+            Compare-BaselineValueDeep -Left $targets1 -Right $targets3 | Should -Be $false
+        }
+    }
 }
 
 Describe 'Invoke-BaselineControlAudit classification' {
