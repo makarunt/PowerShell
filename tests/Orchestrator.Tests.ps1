@@ -390,27 +390,43 @@ Describe 'Manual-review highlighting in reports' {
             }
         }
 
-        It 'applies the manual-row CSS class to exactly the non-automatable rows' {
+        It 'applies the manual-cell CSS class to exactly the non-automatable rows'' Result/Notes cell, not the whole row' {
             $path = [System.IO.Path]::GetTempFileName()
             try {
                 Export-BaselineHtmlReport -AuditResults $script:ManualReviewAuditResults -Path $path -Title 'Test' | Out-Null
                 $content = Get-Content $path -Raw
-                $manualRowCount = ([regex]::Matches($content, 'class="manual-row"')).Count
-                $manualRowCount | Should -Be 2
+                $manualCellCount = ([regex]::Matches($content, 'class="manual-cell"')).Count
+                $manualCellCount | Should -Be 2
+                # Cell-level, not row-level: no bare "<tr class=" left over from the old
+                # whole-row highlight.
+                $content | Should -Not -Match '<tr class='
             }
             finally {
                 Remove-Item $path -ErrorAction SilentlyContinue
             }
         }
 
-        It 'omits the manual-summary div and manual-row class entirely when there are no manual-review controls' {
+        It 'applies the compliant-yes CSS class to exactly the compliant controls'' Compliant cell' {
+            $path = [System.IO.Path]::GetTempFileName()
+            try {
+                Export-BaselineHtmlReport -AuditResults $script:ManualReviewAuditResults -Path $path -Title 'Test' | Out-Null
+                $content = Get-Content $path -Raw
+                $compliantYesCount = ([regex]::Matches($content, 'class="compliant-yes"')).Count
+                $compliantYesCount | Should -Be 1
+            }
+            finally {
+                Remove-Item $path -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'omits the manual-summary div and manual-cell class entirely when there are no manual-review controls' {
             $path = [System.IO.Path]::GetTempFileName()
             try {
                 $onlyAuto = @($script:ManualReviewAuditResults | Where-Object Automatable)
                 Export-BaselineHtmlReport -AuditResults $onlyAuto -Path $path -Title 'Test' | Out-Null
                 $content = Get-Content $path -Raw
                 $content | Should -Not -Match '<div class="manual-summary">'
-                $content | Should -Not -Match 'class="manual-row"'
+                $content | Should -Not -Match 'class="manual-cell"'
             }
             finally {
                 Remove-Item $path -ErrorAction SilentlyContinue

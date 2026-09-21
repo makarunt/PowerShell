@@ -467,13 +467,20 @@ scroll to find):
   the top, before the full table, with the same list. Each one's row further
   down in the table also has its Id bolded and prefixed with `⚠`, so it's
   visible while scanning the table alone, not just the summary at the top.
-- **HTML report.** The same summary appears as a highlighted callout box, and
-  every such control's table row gets an amber background (CSS class
-  `manual-row`) plus the same `⚠` prefix on its Id cell.
+- **HTML report.** The same summary appears as a highlighted callout box.
+  Color is localized to the one cell that explains it, not the whole row:
+  a manual-review control's Result/Notes cell gets an amber background (CSS
+  class `manual-cell`), and any compliant control's Compliant cell gets a
+  light-green one (`compliant-yes`) — so the color signal stays easy to scan
+  instead of tinting unrelated columns (Current/Desired/Workload) that read
+  the same either way. The `⚠` prefix on a manual control's Id cell is kept
+  regardless, so the row still reads as flagged in plain text (e.g. after
+  copy/paste), not just by color.
 
 None of this changes what gets applied or skipped — it's purely about making
-sure "this one needs a human" is impossible to miss, whether you're watching
-the console, skimming a report's top, or reading the full table.
+sure "this one needs a human" and "this one's compliant" are impossible to
+miss, whether you're watching the console, skimming a report's top, or
+reading the full table.
 
 **The HTML report's table is also fixed-width and responsive**, not just
 highlighted. Columns use percentage widths (`table-layout: fixed` with a
@@ -702,10 +709,11 @@ Invoke-Pester -Path ./tests
   `mechanismPossiblyDeprecated` flag, a genuine thrown `Set-` error staying
   `Failed` and never reaching the helper at all, and StrictMode-safety
   against a hand-built catalog entry with no `MechanismPossiblyDeprecated`
-  property. Also new in v2: a block of tests for the manual-review report
-  highlighting described under "`Automatable: false` controls" above -
-  summary section present/absent, and row-level `⚠`/`manual-row` marking, in
-  both the Markdown and HTML report.
+  property. Also new in v2: a block of tests for the manual-review/compliant
+  report highlighting described under "`Automatable: false` controls" above -
+  summary section present/absent, row-level `⚠` marking in the Markdown
+  report, and cell-level `manual-cell`/`compliant-yes` marking in the HTML
+  report.
 - `V1Integrity.Tests.ps1` — new in v2, the mechanical proof that v1 is
   untouched: re-hashes every file `../M365BaselineToolkit` (v1) currently has
   against `v1-baseline-hashes.json` (captured via `git ls-files | Get-FileHash`
