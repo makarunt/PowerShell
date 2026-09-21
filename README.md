@@ -727,7 +727,11 @@ this against a production tenant.
   federation allow-list cmdlets have had several revisions historically;
   verify against your installed `MicrosoftTeams` module version before
   relying on it, same as the two EntraID controls flagged above.
-- Out of scope by design (per the original spec): no Conditional Access
-  policy management, no Security Defaults toggling, no controls beyond the
-  inventory in this README, and no telemetry — this runs entirely against
-  your own tenant and stays local.
+- Out of scope by design: no Security Defaults toggling, no controls beyond
+  the inventory in this README, and no telemetry — this runs entirely against
+  your own tenant and stays local. Conditional Access policy management is
+  in scope (see [Conditional Access controls (report-only)](#conditional-access-controls-report-only)
+  above) but deliberately limited to a fixed set of report-only policies —
+  see that section's "Non-goals" for what it specifically does not do
+  (named-location/device-compliance/hybrid-join policies, or auto-promoting
+  a report-only policy to enabled).
