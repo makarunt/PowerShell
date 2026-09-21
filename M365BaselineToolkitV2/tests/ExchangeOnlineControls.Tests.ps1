@@ -9,6 +9,47 @@
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../modules/BaselineCore.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot '../modules/ExchangeOnlineControls.psm1') -Force
+
+    # ExchangeOnlineManagement isn't necessarily installed wherever this suite runs
+    # (unlike Microsoft.Graph, which the other test files' mocks lean on existing for
+    # real). Since Pester 5, Mock requires its target command to already be resolvable -
+    # a real cmdlet, or an existing function - it can no longer "blindly" mock a name
+    # that exists nowhere, the way Pester 4 did. Confirmed live: on a workstation with
+    # Microsoft.Graph installed but not ExchangeOnlineManagement, every test in this
+    # file failed with "CommandNotFoundException: Could not find Command
+    # Get-OrganizationConfig" (and the same for every other EXO cmdlet below) before
+    # Mock ever got a chance to run. These stubs exist purely so Mock has something to
+    # find and replace - their own bodies are never reached once Mock -CommandName is
+    # applied over them. Declared only when the real cmdlet isn't already present, so a
+    # machine that DOES have ExchangeOnlineManagement installed keeps using the real
+    # cmdlet's own (more accurate) parameter metadata for the mock instead.
+    if (-not (Get-Command Get-OrganizationConfig -ErrorAction SilentlyContinue)) {
+        function global:Get-OrganizationConfig { [CmdletBinding()] param() }
+    }
+    if (-not (Get-Command Set-OrganizationConfig -ErrorAction SilentlyContinue)) {
+        function global:Set-OrganizationConfig { [CmdletBinding()] param([switch]$AuditDisabled) }
+    }
+    if (-not (Get-Command Get-AntiPhishPolicy -ErrorAction SilentlyContinue)) {
+        function global:Get-AntiPhishPolicy { [CmdletBinding()] param([string]$Identity) }
+    }
+    if (-not (Get-Command Set-AntiPhishPolicy -ErrorAction SilentlyContinue)) {
+        function global:Set-AntiPhishPolicy { [CmdletBinding()] param([string]$Identity, [switch]$EnableSpoofIntelligence, [switch]$EnableMailboxIntelligence, [switch]$EnableMailboxIntelligenceProtection) }
+    }
+    if (-not (Get-Command Get-TransportConfig -ErrorAction SilentlyContinue)) {
+        function global:Get-TransportConfig { [CmdletBinding()] param() }
+    }
+    if (-not (Get-Command Set-TransportConfig -ErrorAction SilentlyContinue)) {
+        function global:Set-TransportConfig { [CmdletBinding()] param([switch]$SmtpClientAuthenticationDisabled) }
+    }
+    if (-not (Get-Command Get-DkimSigningConfig -ErrorAction SilentlyContinue)) {
+        function global:Get-DkimSigningConfig { [CmdletBinding()] param([string]$Identity) }
+    }
+    if (-not (Get-Command Set-DkimSigningConfig -ErrorAction SilentlyContinue)) {
+        function global:Set-DkimSigningConfig { [CmdletBinding()] param([string]$Identity, [bool]$Enabled) }
+    }
+    if (-not (Get-Command New-DkimSigningConfig -ErrorAction SilentlyContinue)) {
+        function global:New-DkimSigningConfig { [CmdletBinding()] param([string]$DomainName, [bool]$Enabled) }
+    }
 }
 
 Describe 'ExchangeOnline-MailboxAuditingDefault' {

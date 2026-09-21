@@ -9,14 +9,25 @@
     smaller protected-file list used for the earlier app-only-auth work.
 
     v1-baseline-hashes.json (checked in alongside this test) was produced by
-    running `git ls-files | Get-FileHash` against v1 at the moment v2 was
-    forked - computed, not hand-maintained, so this test works regardless of
-    exactly what v1 contained at that moment. This test re-hashes every file
-    v1 has right now and asserts every hash still matches that baseline, AND
-    that v1's tracked file list itself (via `git ls-files`) hasn't grown or
+    running `git ls-files` against v1 at the moment v2 was forked and hashing
+    each file with Get-BaselineNormalizedTextHash (see below) - computed, not
+    hand-maintained, so this test works regardless of exactly what v1
+    contained at that moment. This test re-hashes every file v1 has right now
+    the same way and asserts every hash still matches that baseline, AND that
+    v1's tracked file list itself (via `git ls-files`) hasn't grown or
     shrunk - so an added or deleted file in v1 fails this test exactly like a
     modified one would, rather than silently passing because it was never in
     the baseline to begin with.
+
+    Hashing is line-ending-normalized (CRLF and lone CR both treated as LF)
+    and BOM-insensitive, not a raw Get-FileHash of the file's on-disk bytes -
+    git on Windows commonly checks text files out with CRLF even though this
+    repo stores them with LF (this project's development sandbox is Linux),
+    so a raw byte hash reported every single tracked file as "MODIFIED" on a
+    real Windows workstation despite `git status` correctly showing a clean
+    tree - the exact same content, different line-ending bytes on disk. This
+    repo's tracked v1 files are all text (.ps1/.psm1/.json/.md/.gitkeep), so
+    normalizing before hashing is safe here.
 #>
 
 BeforeAll {
@@ -31,6 +42,31 @@ BeforeAll {
     }
 
     $script:Baseline = Get-Content -LiteralPath $script:BaselinePath -Raw | ConvertFrom-Json -Depth 5
+
+    function Get-BaselineNormalizedTextHash {
+        <#
+        Computes a SHA256 hash that's stable across CRLF-vs-LF checkouts and
+        BOM-vs-no-BOM saves. Reads raw bytes, strips a leading UTF-8 BOM if
+        present, decodes as UTF-8, normalizes all line endings to LF, then
+        hashes the UTF-8 bytes of that normalized text.
+        #>
+        param([Parameter(Mandatory)][string]$Path)
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $bytes = $bytes[3..($bytes.Length - 1)]
+        }
+        $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+        $normalized = $text -replace "`r`n", "`n" -replace "`r", "`n"
+        $normalizedBytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $sha256.ComputeHash($normalizedBytes)
+            return -join ($hashBytes | ForEach-Object { $_.ToString('X2') })
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
 }
 
 Describe 'v1 (M365BaselineToolkit) is untouched by v2' {
@@ -40,7 +76,7 @@ Describe 'v1 (M365BaselineToolkit) is untouched by v2' {
     }
 
     Context 'Every file recorded in the v1 baseline still exists with an unchanged hash' {
-        It 'has a SHA256 hash exactly matching the recorded baseline for every file' {
+        It 'has a line-ending-normalized SHA256 hash exactly matching the recorded baseline for every file' {
             $mismatches = [System.Collections.Generic.List[string]]::new()
             foreach ($entry in $script:Baseline) {
                 $fullPath = Join-Path $script:V1Root $entry.Path
@@ -48,7 +84,7 @@ Describe 'v1 (M365BaselineToolkit) is untouched by v2' {
                     $mismatches.Add("MISSING: $($entry.Path)")
                     continue
                 }
-                $actualHash = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash
+                $actualHash = Get-BaselineNormalizedTextHash -Path $fullPath
                 if ($actualHash -ne $entry.Sha256) {
                     $mismatches.Add("MODIFIED: $($entry.Path)")
                 }

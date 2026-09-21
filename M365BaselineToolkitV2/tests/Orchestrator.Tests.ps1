@@ -100,8 +100,16 @@ Describe 'Invoke-BaselineControlAudit classification' {
         function global:Get-Fake-OkState { [pscustomobject]@{ Id = 'Fake-Ok'; Value = 'Direct' } }
         function global:Set-Fake-OkState { param($DesiredValue, $CurrentValue) [pscustomobject]@{ Id = 'Fake-Ok'; Status = 'Success'; PreviousValue = $CurrentValue; AppliedValue = $DesiredValue; Message = '' } }
 
-        function global:Get-Fake-DriftState { [pscustomobject]@{ Id = 'Fake-Drift'; Value = 'AnonymousAccess' } }
-        function global:Set-Fake-DriftState { param($DesiredValue, $CurrentValue) [pscustomobject]@{ Id = 'Fake-Drift'; Status = 'Success'; PreviousValue = $CurrentValue; AppliedValue = $DesiredValue; Message = '' } }
+        # Tracks state via a script-scoped variable, updated by Set-, rather than a
+        # hardcoded value that never changes - Invoke-BaselineControlApply now calls
+        # Test-BaselineApplyOutcome after any successful Set-, which re-reads via
+        # Get-Fake-DriftState to confirm the change landed. A static Get- that always
+        # returns the old value (as this fixture did before) makes that read-back
+        # never match, misclassifying a genuinely successful Set- as
+        # Applied-PendingConfirmation - not what this test is checking.
+        $script:FakeDriftValue = 'AnonymousAccess'
+        function global:Get-Fake-DriftState { [pscustomobject]@{ Id = 'Fake-Drift'; Value = $script:FakeDriftValue } }
+        function global:Set-Fake-DriftState { param($DesiredValue, $CurrentValue) $script:FakeDriftValue = $DesiredValue; [pscustomobject]@{ Id = 'Fake-Drift'; Status = 'Success'; PreviousValue = $CurrentValue; AppliedValue = $DesiredValue; Message = '' } }
 
         function global:Get-Fake-ManualState { [pscustomobject]@{ Id = 'Fake-Manual'; Value = $null } }
         function global:Set-Fake-ManualState { param($DesiredValue, $CurrentValue) [pscustomobject]@{ Id = 'Fake-Manual'; Status = 'Skipped-Manual'; PreviousValue = $CurrentValue; AppliedValue = $null; Message = 'See GUI.' } }
