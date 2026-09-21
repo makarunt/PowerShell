@@ -228,7 +228,14 @@ try {
 
             $errorCount = @($audit | Where-Object { $_.Error }).Count
             $nonCompliantCount = @($audit | Where-Object { $_.Compliant -eq $false }).Count
-            Write-BaselineHost "`nAudit complete. Non-compliant: $nonCompliantCount. Read errors: $errorCount." 'Cyan'
+            $manualControls = @($audit | Where-Object { -not $_.Automatable })
+            Write-BaselineHost "`nAudit complete. Non-compliant: $nonCompliantCount. Read errors: $errorCount. Manual review required: $($manualControls.Count)." 'Cyan'
+
+            if ($manualControls.Count -gt 0) {
+                Write-BaselineHost "`n$([char]0x26A0) Manual review required - no automated fix exists for these controls (see report for full detail):" 'Yellow'
+                foreach ($m in $manualControls) { Write-BaselineHost "  $($m.Id): $($m.ManualInstructions)" 'Yellow' }
+            }
+
             if ($errorCount -gt 0) { $exitCode = 2 }
         }
 
@@ -284,7 +291,7 @@ try {
             Write-BaselineHost "`nApply complete ($($applyResults.Count) control(s) processed). Succeeded: $($succeeded.Count). Already compliant: $($skippedOk.Count). Manual/skipped: $($skippedManual.Count). Pending confirmation: $($pendingConfirmation.Count). Possibly-deprecated mechanism: $($mechanismDeprecated.Count). Failed: $($failed.Count)$(if ($otherCount -gt 0) { ". Other: $otherCount" })." 'Cyan'
 
             if ($skippedManual.Count -gt 0) {
-                Write-BaselineHost "`nControls with no automated fix available (no suitable API exists) - change these by hand:" 'Yellow'
+                Write-BaselineHost "`n$([char]0x26A0) Manual review required - no automated fix exists for these controls:" 'Yellow'
                 foreach ($m in $skippedManual) { Write-BaselineHost "  $($m.Id): $($m.Message)" 'Yellow' }
             }
 
@@ -338,6 +345,11 @@ try {
             $otherCount = $restoreResults.Count - $namedCount
 
             Write-BaselineHost "`nRestore complete ($($restoreResults.Count) control(s) processed). Succeeded: $($succeeded.Count). Manual/skipped: $($skippedManual.Count). No data to restore: $($skippedNoData.Count). Pending confirmation: $($pendingConfirmation.Count). Possibly-deprecated mechanism: $($mechanismDeprecated.Count). Failed: $($failed.Count)$(if ($otherCount -gt 0) { ". Other: $otherCount" })." 'Cyan'
+
+            if ($skippedManual.Count -gt 0) {
+                Write-BaselineHost "`n$([char]0x26A0) Manual review required - no automated fix exists for these controls:" 'Yellow'
+                foreach ($m in $skippedManual) { Write-BaselineHost "  $($m.Id): $($m.Message)" 'Yellow' }
+            }
 
             if ($pendingConfirmation.Count -gt 0) {
                 Write-BaselineHost "`nControls restored but not yet confirmed (often a propagation delay, re-audit later):" 'Yellow'

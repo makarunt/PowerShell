@@ -1696,8 +1696,23 @@ function Export-BaselineMarkdownReport {
     $lines.Add('')
     $errorCount = @($AuditResults | Where-Object { $_.Error }).Count
     $nonCompliantCount = @($AuditResults | Where-Object { $_.Compliant -eq $false }).Count
-    $lines.Add("Controls evaluated: $($AuditResults.Count) | Non-compliant: $nonCompliantCount | Read errors: $errorCount")
+    $manualControls = @($AuditResults | Where-Object { -not $_.Automatable })
+    $lines.Add("Controls evaluated: $($AuditResults.Count) | Non-compliant: $nonCompliantCount | Read errors: $errorCount | Manual review required: $($manualControls.Count)")
     $lines.Add('')
+
+    # Surfaced up front, before the full table, so an admin doesn't have to scan
+    # every row's Notes column to find the controls that need hands-on work -
+    # each one also carries a warning marker on its own row further down.
+    if ($manualControls.Count -gt 0) {
+        $lines.Add("## $([char]0x26A0) Manual review required")
+        $lines.Add('')
+        $lines.Add('No automated fix exists for these controls. Change them by hand:')
+        $lines.Add('')
+        foreach ($m in $manualControls) {
+            $lines.Add("- **$($m.Id)** ($($m.Workload)): $($m.ManualInstructions)")
+        }
+        $lines.Add('')
+    }
 
     if ($ApplyResults) {
         $lines.Add('| Id | Workload | Setting | Current | Desired | Compliant | Automatable | Action Taken | Result |')
@@ -1712,16 +1727,20 @@ function Export-BaselineMarkdownReport {
         $compliantText = if ($null -eq $r.Compliant) { 'Unknown' } elseif ($r.Compliant) { 'Yes' } else { 'No' }
         $current = if ($r.Error) { "_error: $($r.Error)_" } else { Format-BaselineValueForDisplay -Value $r.CurrentValue }
         $desired = Format-BaselineValueForDisplay -Value $r.DesiredValue
+        # A leading marker on the Id itself (not just the Notes text) so the manual-
+        # review controls are visible while scanning the Id column alone, without
+        # needing to read every row's Notes cell.
+        $idCell = if (-not $r.Automatable) { "$([char]0x26A0) **$($r.Id)**" } else { $r.Id }
 
         if ($ApplyResults) {
             $applyResult = $applyById[$r.Id]
             $action = if ($applyResult) { $applyResult.Status } else { 'N/A' }
             $resultMsg = if ($applyResult -and $applyResult.Message) { $applyResult.Message } else { '' }
-            $lines.Add("| $($r.Id) | $($r.Workload) | $($r.Description) | $current | $desired | $compliantText | $($r.Automatable) | $action | $resultMsg |")
+            $lines.Add("| $idCell | $($r.Workload) | $($r.Description) | $current | $desired | $compliantText | $($r.Automatable) | $action | $resultMsg |")
         }
         else {
             $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } elseif ($r.Detail) { [string]$r.Detail } else { '' }
-            $lines.Add("| $($r.Id) | $($r.Workload) | $($r.Description) | $current | $desired | $compliantText | $($r.Automatable) | $notes |")
+            $lines.Add("| $idCell | $($r.Workload) | $($r.Description) | $current | $desired | $compliantText | $($r.Automatable) | $notes |")
         }
     }
 
@@ -1766,6 +1785,9 @@ function Export-BaselineHtmlReport {
     $applyById = @{}
     if ($ApplyResults) { foreach ($r in $ApplyResults) { $applyById[$r.Id] = $r } }
 
+    $manualControls = @($AuditResults | Where-Object { -not $_.Automatable })
+    $warningGlyph = [string][char]0x26A0
+
     $rowsHtml = foreach ($r in $AuditResults) {
         $compliantText = if ($null -eq $r.Compliant) { 'Unknown' } elseif ($r.Compliant) { 'Yes' } else { 'No' }
         $current = if ($r.Error) { "error: $($r.Error)" } else { Format-BaselineValueForDisplay -Value $r.CurrentValue }
@@ -1780,10 +1802,32 @@ function Export-BaselineHtmlReport {
             $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } elseif ($r.Detail) { [string]$r.Detail } else { '' }
             "<td>$([System.Net.WebUtility]::HtmlEncode($notes))</td>"
         }
-        "<tr><td>$([System.Net.WebUtility]::HtmlEncode($r.Id))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Workload))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Description))</td><td>$([System.Net.WebUtility]::HtmlEncode($current))</td><td>$([System.Net.WebUtility]::HtmlEncode($desired))</td><td>$compliantText</td><td>$($r.Automatable)</td>$extra</tr>"
+        # rowClass highlights every non-automatable ("manual review required") row with
+        # a distinct background (see .manual-row in <style> below), and the Id cell
+        # itself also carries a warning glyph, so the row reads as flagged whether
+        # someone's scanning by color or by column text (e.g. after copy/paste).
+        $rowClass = if (-not $r.Automatable) { ' class="manual-row"' } else { '' }
+        $idText = if (-not $r.Automatable) { "$warningGlyph $($r.Id)" } else { $r.Id }
+        "<tr$rowClass><td>$([System.Net.WebUtility]::HtmlEncode($idText))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Workload))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Description))</td><td>$([System.Net.WebUtility]::HtmlEncode($current))</td><td>$([System.Net.WebUtility]::HtmlEncode($desired))</td><td>$compliantText</td><td>$($r.Automatable)</td>$extra</tr>"
     }
 
     $extraHeader = if ($ApplyResults) { '<th>Action Taken</th><th>Result</th>' } else { '<th>Notes</th>' }
+
+    $manualSummaryHtml = if ($manualControls.Count -gt 0) {
+        $items = ($manualControls | ForEach-Object {
+            "<li><strong>$([System.Net.WebUtility]::HtmlEncode($_.Id))</strong> ($([System.Net.WebUtility]::HtmlEncode($_.Workload))): $([System.Net.WebUtility]::HtmlEncode([string]$_.ManualInstructions))</li>"
+        }) -join "`n"
+        @"
+<div class="manual-summary">
+<h2>$warningGlyph Manual review required</h2>
+<p>No automated fix exists for these controls. Change them by hand:</p>
+<ul>
+$items
+</ul>
+</div>
+"@
+    }
+    else { '' }
 
     $html = @"
 <!DOCTYPE html>
@@ -1797,11 +1841,17 @@ table { border-collapse: collapse; width: 100%; }
 th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; font-size: 0.9rem; vertical-align: top; }
 th { background: #f2f2f2; }
 tr:nth-child(even) { background: #fafafa; }
+tr.manual-row { background: #fff3cd; }
+tr.manual-row:nth-child(even) { background: #ffe9a8; }
+.manual-summary { border: 1px solid #f0ad4e; background: #fff3cd; border-radius: 4px; padding: 0.75rem 1.25rem; margin-bottom: 1.5rem; }
+.manual-summary h2 { margin-top: 0; font-size: 1.1rem; }
+.manual-summary ul { margin-bottom: 0; }
 </style>
 </head>
 <body>
 <h1>$([System.Net.WebUtility]::HtmlEncode($Title))</h1>
 <p>Generated: $((Get-Date).ToUniversalTime().ToString('o'))</p>
+$manualSummaryHtml
 <table>
 <thead><tr><th>Id</th><th>Workload</th><th>Setting</th><th>Current</th><th>Desired</th><th>Compliant</th><th>Automatable</th>$extraHeader</tr></thead>
 <tbody>
