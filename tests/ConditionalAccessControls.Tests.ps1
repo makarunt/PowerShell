@@ -73,6 +73,10 @@ BeforeEach {
         [pscustomobject]@{ Id = 'emergency-group-id'; DisplayName = $DisplayName }
     }
     Mock -CommandName Get-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith { @() }
+    # Defaults to disabled so every existing test's create/update path behaves
+    # as it did before this mock existed; the dedicated Security Defaults
+    # context below overrides this per-test to IsEnabled = $true.
+    Mock -CommandName Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ModuleName ConditionalAccessControls -MockWith { [pscustomobject]@{ IsEnabled = $false } }
     Mock -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith {
         param($BodyParameter)
         [pscustomobject]@{ Id = 'new-policy-id'; DisplayName = $BodyParameter.displayName }
@@ -344,6 +348,83 @@ Context 'ConditionalAccessControls - dynamic resolution (no hardcoded GUIDs)' {
         Mock -CommandName Get-MgServicePrincipal -ModuleName ConditionalAccessControls -MockWith { $null }
         { Set-CA-RequireMfaAzureManagementState -DesiredValue $true -CurrentValue $false } | Should -Throw '*did not resolve*'
         Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 0
+    }
+}
+
+Context 'ConditionalAccessControls - Security Defaults gate' {
+
+    BeforeEach {
+        Mock -CommandName Get-MgSubscribedSku -ModuleName BaselineCore -MockWith { @(New-FakeSku -ServicePlanNames @('AAD_PREMIUM')) }
+    }
+
+    It 'never creates a policy - not even report-only - while Security Defaults is enabled' {
+        Mock -CommandName Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ModuleName ConditionalAccessControls -MockWith { [pscustomobject]@{ IsEnabled = $true } }
+
+        $result = Set-CA-RequireMfaAllUsersState -DesiredValue $true -CurrentValue $false
+
+        $result.Status | Should -Be 'Skipped-SecurityDefaultsEnabled'
+        $result.Message | Should -Match 'Security Defaults'
+        Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 0
+    }
+
+    It 'checks Security Defaults before the overlap scan, so the overlap message never masks the real reason' {
+        Mock -CommandName Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ModuleName ConditionalAccessControls -MockWith { [pscustomobject]@{ IsEnabled = $true } }
+        Mock -CommandName Get-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith {
+            @(New-FakeCAPolicy -DisplayName 'Multifactor authentication for Microsoft partners and vendors' -State 'enabled' -IncludeUsers @('All') -BuiltInControls @('mfa'))
+        }
+
+        $result = Set-CA-RequireMfaAllUsersState -DesiredValue $true -CurrentValue $false
+
+        $result.Status | Should -Be 'Skipped-SecurityDefaultsEnabled'
+        Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 0
+    }
+
+    It 'is not affected by ForceCreateDespiteOverlap - there is deliberately no override for this gate' {
+        Mock -CommandName Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ModuleName ConditionalAccessControls -MockWith { [pscustomobject]@{ IsEnabled = $true } }
+
+        $result = Set-CA-RequireMfaAllUsersState -DesiredValue $true -CurrentValue $false -ForceCreateDespiteOverlap $true
+
+        $result.Status | Should -Be 'Skipped-SecurityDefaultsEnabled'
+        Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 0
+    }
+
+    It 'still updates an existing toolkit-owned policy normally - the gate only blocks creation' {
+        Mock -CommandName Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ModuleName ConditionalAccessControls -MockWith { [pscustomobject]@{ IsEnabled = $true } }
+        Mock -CommandName Get-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith {
+            @(New-FakeCAPolicy -DisplayName '[M365 Baseline] Require MFA for all users' -State 'enabled' -IncludeUsers @() -BuiltInControls @('mfa'))
+        }
+
+        $result = Set-CA-RequireMfaAllUsersState -DesiredValue $true -CurrentValue $false
+
+        $result.Status | Should -Be 'Updated'
+        Should -Invoke -CommandName Update-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 1
+    }
+
+    It 'Get- (Audit) still reports compliance normally and adds a note when Security Defaults is enabled' {
+        Mock -CommandName Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ModuleName ConditionalAccessControls -MockWith { [pscustomobject]@{ IsEnabled = $true } }
+
+        $result = Get-CA-RequireMfaAllUsersState
+
+        $result.Value | Should -Be $false
+        $result.Detail | Should -Match 'Security Defaults enabled'
+        $result.Detail | Should -Match 'will NOT create'
+    }
+
+    It 'Get- (Audit) adds no Security Defaults note when it is disabled' {
+        Mock -CommandName Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ModuleName ConditionalAccessControls -MockWith { [pscustomobject]@{ IsEnabled = $false } }
+
+        $result = Get-CA-RequireMfaAllUsersState
+
+        $result.Detail | Should -Not -Match 'Security Defaults'
+    }
+
+    It 'Apply proceeds and creates the policy normally once Security Defaults is disabled' {
+        Mock -CommandName Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ModuleName ConditionalAccessControls -MockWith { [pscustomobject]@{ IsEnabled = $false } }
+
+        $result = Set-CA-RequireMfaAllUsersState -DesiredValue $true -CurrentValue $false
+
+        $result.Status | Should -Be 'Created'
+        Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 1
     }
 }
 

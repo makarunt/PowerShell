@@ -5,7 +5,10 @@
     Get-/Set- function pairs for the toolkit's Conditional Access (CA) controls.
     Requires Microsoft.Graph (v2+) to be connected before use (Connect-BaselineWorkload
     -Connection Graph) with at least Policy.ReadWrite.ConditionalAccess,
-    Group.ReadWrite.All, Organization.Read.All, and Application.Read.All.
+    Policy.Read.All (also covers reading whether Security Defaults is enabled,
+    via Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy - see
+    Test-BaselineCASecurityDefaultsEnabled), Group.ReadWrite.All,
+    Organization.Read.All, and Application.Read.All.
 
     NON-NEGOTIABLE: every policy this module creates or updates is set to
     state = 'enabledForReportingButNotEnforced' ("report-only"). No code path in
@@ -66,6 +69,7 @@ $script:CAAzureManagementAppId = '797f4846-ba00-4fd7-ba43-dac1f8f63013'
 $script:CAPolicyListCache = $null
 $script:CAEmergencyGroupIdCache = $null
 $script:CAAdminRoleIdCache = $null
+$script:CASecurityDefaultsEnabledCache = $null
 
 # ---------------------------------------------------------------------------
 # Shared engine: licensing, policy lookup, overlap detection, emergency group
@@ -97,6 +101,38 @@ function Test-BaselineCATierAvailable {
         return (Test-TenantServicePlan -ServicePlanNames $script:CATier1ServicePlans) -or (Test-TenantServicePlan -ServicePlanNames $script:CATier2ServicePlans)
     }
     return Test-TenantServicePlan -ServicePlanNames $script:CATier2ServicePlans
+}
+
+function Test-BaselineCASecurityDefaultsEnabled {
+    <#
+    .SYNOPSIS
+        Checks whether this tenant currently has Microsoft Entra Security
+        Defaults enabled.
+    .DESCRIPTION
+        Confirmed against current Microsoft documentation: creating a
+        Conditional Access policy - even report-only, exactly what this
+        module ever does - permanently removes the ability to re-enable
+        Security Defaults afterward. The "Manage security defaults" toggle
+        stays unavailable while ANY Conditional Access policy exists in the
+        tenant, in ANY state, until every one of them (this module's own
+        included) is deleted. That's a one-way door for the tenant, distinct
+        from and in addition to this module's report-only-never-enforced
+        guarantee, so Set- refuses to CREATE a new toolkit-owned policy
+        while Security Defaults remains on rather than silently taking away
+        that option. Cached per run (reset on the module's next -Force
+        import) since every CA control's Get-/Set- can hit this on the
+        "policy doesn't exist yet" path.
+    .EXAMPLE
+        Test-BaselineCASecurityDefaultsEnabled
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+    if ($null -eq $script:CASecurityDefaultsEnabledCache) {
+        $policy = Get-MgPolicyIdentitySecurityDefaultEnforcementPolicy -ErrorAction Stop
+        $script:CASecurityDefaultsEnabledCache = [bool]$policy.IsEnabled
+    }
+    return $script:CASecurityDefaultsEnabledCache
 }
 
 function Get-BaselineCAPolicyListCache {
@@ -387,11 +423,18 @@ function Get-BaselineCAControlState {
     $policy = Find-BaselineCAPolicyByName -DisplayName $Spec.DisplayName
     if (-not $policy) {
         $overlap = Find-BaselineCAOverlap -Predicate $Spec.OverlapPredicate
+        # Checked here (not just in Set-) so an admin sees this before ever
+        # running Apply, not as a surprise afterward - see
+        # Test-BaselineCASecurityDefaultsEnabled for why it matters.
+        $securityDefaultsNote = if (Test-BaselineCASecurityDefaultsEnabled) {
+            " This tenant has Security Defaults enabled - Apply will NOT create this report-only policy while that remains on, since creating any Conditional Access policy (even report-only) permanently blocks re-enabling Security Defaults until every Conditional Access policy in the tenant, including this one, is deleted. Disable Security Defaults first (Entra admin center > Identity > Overview > Properties > Manage security defaults) if you want this control automated."
+        }
+        else { '' }
         $detail = if ($overlap) {
-            "Policy '$($Spec.DisplayName)' does not exist yet. An existing, non-toolkit-owned policy ('$($overlap.DisplayName)', id $($overlap.Id)) heuristically overlaps with this control's intent - Apply will skip creating this one (Skipped-PotentialOverlap) unless forceCreateDespiteOverlap is set for it in config."
+            "Policy '$($Spec.DisplayName)' does not exist yet. An existing, non-toolkit-owned policy ('$($overlap.DisplayName)', id $($overlap.Id)) heuristically overlaps with this control's intent - Apply will skip creating this one (Skipped-PotentialOverlap) unless forceCreateDespiteOverlap is set for it in config.$securityDefaultsNote"
         }
         else {
-            "Policy '$($Spec.DisplayName)' does not exist yet."
+            "Policy '$($Spec.DisplayName)' does not exist yet.$securityDefaultsNote"
         }
         return [pscustomobject]@{ Id = $Spec.Id; Value = $false; Detail = $detail }
     }
@@ -455,6 +498,18 @@ function Set-BaselineCAControlState {
     $policy = Find-BaselineCAPolicyByName -DisplayName $Spec.DisplayName
 
     if (-not $policy) {
+        # Checked before the overlap scan, and before ever building/sending a
+        # create request: creating ANY Conditional Access policy - even
+        # report-only, all this module ever does - permanently blocks the
+        # tenant from re-enabling Security Defaults later, until every CA
+        # policy (this one included) is deleted again. That's a one-way door
+        # this module must never open on its own, so there is deliberately no
+        # override for it (unlike ForceCreateDespiteOverlap above) - see
+        # Test-BaselineCASecurityDefaultsEnabled.
+        if (Test-BaselineCASecurityDefaultsEnabled) {
+            $message = 'Skipped - this tenant has Microsoft Entra Security Defaults enabled. Creating any Conditional Access policy, even report-only, permanently blocks re-enabling Security Defaults until every Conditional Access policy in the tenant is deleted, so this toolkit will not create one while Security Defaults remains on. Disable Security Defaults first (Entra admin center > Identity > Overview > Properties > Manage security defaults), then re-run Apply, if you want this control automated.'
+            return [pscustomobject]@{ Id = $Spec.Id; Status = 'Skipped-SecurityDefaultsEnabled'; PreviousValue = $CurrentValue; AppliedValue = $null; Message = $message }
+        }
         $overlap = Find-BaselineCAOverlap -Predicate $Spec.OverlapPredicate
         if ($overlap -and -not $ForceCreateDespiteOverlap) {
             $message = "Skipped - an existing, non-toolkit-owned policy ('$($overlap.DisplayName)', id $($overlap.Id)) already looks like it covers this. Review it manually; set forceCreateDespiteOverlap: true for this control in config/baseline.config.json if you still want this toolkit-owned report-only policy created alongside it."
@@ -1218,6 +1273,7 @@ Export-ModuleMember -Function @(
     # them keeps them usable internally without tripping the scan. Use
     # InModuleScope 'ConditionalAccessControls' in tests to reach them directly.
     'Test-BaselineCATierAvailable'
+    'Test-BaselineCASecurityDefaultsEnabled'
     'Get-BaselineCAPolicyListCache'
     'Find-BaselineCAPolicyByName'
     'Find-BaselineCAOverlap'

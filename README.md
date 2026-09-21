@@ -563,6 +563,31 @@ and excluded from every policy's user condition. Populate it yourself with
 your organization's actual break-glass accounts — this toolkit only ensures
 the group exists and is wired into every policy; it never adds members to it.
 
+### Security Defaults blocks CA policy creation - not even report-only
+
+Confirmed against current Microsoft documentation: creating **any**
+Conditional Access policy — even report-only, all this module ever does —
+permanently removes the tenant's ability to re-enable Microsoft Entra
+Security Defaults afterward. The "Manage security defaults" toggle stays
+unavailable while any CA policy exists in the tenant, in any state, until
+every one of them is deleted again. That's a one-way door this toolkit must
+never open on its own, so if Security Defaults is enabled, `Apply` refuses
+to **create** a toolkit-owned CA policy at all — reported as
+`Skipped-SecurityDefaultsEnabled` — with no config override, unlike
+`forceCreateDespiteOverlap` above. `Audit` still reads and reports normally
+regardless (it's read-only, so nothing to protect against), and surfaces the
+same "Security Defaults enabled" note in the control's `Detail` so it's
+visible before you ever run Apply, not as a surprise afterward.
+
+This only ever matters for a not-yet-created toolkit-owned policy: per
+Microsoft's own mutual-exclusivity rule above, a tenant simply cannot have
+Security Defaults enabled *and* an existing toolkit-owned policy at the same
+time (the policy's own existence would already have blocked Security
+Defaults from being turned on) — so updating an already-existing
+toolkit-owned policy is never affected by this gate. To use this toolkit's
+CA controls, disable Security Defaults first: Entra admin center > Identity
+> Overview > Properties > Manage security defaults.
+
 ### Restore never deletes a CA policy
 
 `-Mode Restore` works by calling each control's `Set-` function with the
