@@ -1813,6 +1813,19 @@ function Export-BaselineHtmlReport {
 
     $extraHeader = if ($ApplyResults) { '<th>Action Taken</th><th>Result</th>' } else { '<th>Notes</th>' }
 
+    # Fixed, percentage-based column widths (used with table-layout: fixed below) so
+    # the table always fits the viewport instead of auto-growing the Current/Desired
+    # columns to fit their longest single-line JSON value - that auto-growth (the
+    # browser default for a table without table-layout: fixed) was exactly what forced
+    # left-right scrolling to see the whole table. Two different column sets since
+    # Apply/Restore reports have two extra columns the plain Audit report doesn't.
+    $colGroupHtml = if ($ApplyResults) {
+        '<colgroup><col style="width:11%"><col style="width:7%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:6%"><col style="width:6%"><col style="width:11%"><col style="width:20%"></colgroup>'
+    }
+    else {
+        '<colgroup><col style="width:12%"><col style="width:8%"><col style="width:16%"><col style="width:16%"><col style="width:16%"><col style="width:6%"><col style="width:7%"><col style="width:19%"></colgroup>'
+    }
+
     $manualSummaryHtml = if ($manualControls.Count -gt 0) {
         $items = ($manualControls | ForEach-Object {
             "<li><strong>$([System.Net.WebUtility]::HtmlEncode($_.Id))</strong> ($([System.Net.WebUtility]::HtmlEncode($_.Workload))): $([System.Net.WebUtility]::HtmlEncode([string]$_.ManualInstructions))</li>"
@@ -1834,11 +1847,21 @@ $items
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>$([System.Net.WebUtility]::HtmlEncode($Title))</title>
 <style>
 body { font-family: -apple-system, Segoe UI, Arial, sans-serif; margin: 2rem; color: #1a1a1a; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; font-size: 0.9rem; vertical-align: top; }
+/* table-layout: fixed makes the browser honor the <colgroup> percentage widths below
+   instead of auto-sizing each column to fit its longest single-line content - without
+   this, a compact-JSON Current/Desired value pushes those columns (and the whole
+   table) wider than the viewport. */
+table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+th, td {
+  border: 1px solid #ccc; padding: 6px 10px; text-align: left; font-size: 0.9rem; vertical-align: top;
+  /* With a fixed column width, long unbroken content (JSON, GUIDs) wraps onto
+     multiple lines instead of overflowing the cell or forcing the column wider. */
+  white-space: normal; word-break: break-word; overflow-wrap: anywhere;
+}
 th { background: #f2f2f2; }
 tr:nth-child(even) { background: #fafafa; }
 tr.manual-row { background: #fff3cd; }
@@ -1846,18 +1869,30 @@ tr.manual-row:nth-child(even) { background: #ffe9a8; }
 .manual-summary { border: 1px solid #f0ad4e; background: #fff3cd; border-radius: 4px; padding: 0.75rem 1.25rem; margin-bottom: 1.5rem; }
 .manual-summary h2 { margin-top: 0; font-size: 1.1rem; }
 .manual-summary ul { margin-bottom: 0; }
+/* Safety net, not the primary fix: table-layout:fixed + word-break above should make
+   the table fit almost any screen on its own. This only kicks in (scrolling just the
+   table, not the whole page) for a genuinely unbreakable value wider than its column
+   even after wrapping - e.g. one long token with no spaces/punctuation to break on. */
+.table-wrap { width: 100%; overflow-x: auto; }
+@media (max-width: 900px) {
+  body { margin: 0.75rem; }
+  th, td { padding: 4px 6px; font-size: 0.8rem; }
+}
 </style>
 </head>
 <body>
 <h1>$([System.Net.WebUtility]::HtmlEncode($Title))</h1>
 <p>Generated: $((Get-Date).ToUniversalTime().ToString('o'))</p>
 $manualSummaryHtml
+<div class="table-wrap">
 <table>
+$colGroupHtml
 <thead><tr><th>Id</th><th>Workload</th><th>Setting</th><th>Current</th><th>Desired</th><th>Compliant</th><th>Automatable</th>$extraHeader</tr></thead>
 <tbody>
 $($rowsHtml -join "`n")
 </tbody>
 </table>
+</div>
 </body>
 </html>
 "@
