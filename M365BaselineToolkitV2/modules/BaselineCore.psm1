@@ -1803,25 +1803,31 @@ function Export-BaselineHtmlReport {
 
     $rowsHtml = foreach ($r in $AuditResults) {
         $compliantText = if ($null -eq $r.Compliant) { 'Unknown' } elseif ($r.Compliant) { 'Yes' } else { 'No' }
+        # Color is localized to the one cell that actually explains it, rather than
+        # tinting the whole row: compliant-yes (light green) on the Compliant cell for
+        # a compliant control, manual-cell (amber) on the Result/Notes cell for a
+        # manual-review control - Current/Desired/Workload/etc. read the same either
+        # way, so leaving them untinted keeps the signal easy to scan instead of
+        # drowning it across unrelated columns.
+        $compliantClass = if ($compliantText -eq 'Yes') { ' class="compliant-yes"' } else { '' }
+        $resultCellClass = if (-not $r.Automatable) { ' class="manual-cell"' } else { '' }
         $current = if ($r.Error) { "error: $($r.Error)" } else { Format-BaselineValueForDisplay -Value $r.CurrentValue }
         $desired = Format-BaselineValueForDisplay -Value $r.DesiredValue
         $extra = if ($ApplyResults) {
             $applyResult = $applyById[$r.Id]
             $action = if ($applyResult) { $applyResult.Status } else { 'N/A' }
             $msg = if ($applyResult) { $applyResult.Message } else { '' }
-            "<td>$([System.Net.WebUtility]::HtmlEncode($action))</td><td>$([System.Net.WebUtility]::HtmlEncode([string]$msg))</td>"
+            "<td>$([System.Net.WebUtility]::HtmlEncode($action))</td><td$resultCellClass>$([System.Net.WebUtility]::HtmlEncode([string]$msg))</td>"
         }
         else {
             $notes = if (-not $r.Automatable) { "Manual: $($r.ManualInstructions)" } elseif ($r.Detail) { [string]$r.Detail } else { '' }
-            "<td>$([System.Net.WebUtility]::HtmlEncode($notes))</td>"
+            "<td$resultCellClass>$([System.Net.WebUtility]::HtmlEncode($notes))</td>"
         }
-        # rowClass highlights every non-automatable ("manual review required") row with
-        # a distinct background (see .manual-row in <style> below), and the Id cell
-        # itself also carries a warning glyph, so the row reads as flagged whether
-        # someone's scanning by color or by column text (e.g. after copy/paste).
-        $rowClass = if (-not $r.Automatable) { ' class="manual-row"' } else { '' }
+        # The warning glyph on a manual row's Id cell is kept regardless of the cell
+        # recoloring above, so the row still reads as flagged when scanned as plain
+        # text (e.g. after copy/paste), not just by color.
         $idText = if (-not $r.Automatable) { "$warningGlyph $($r.Id)" } else { $r.Id }
-        "<tr$rowClass><td>$([System.Net.WebUtility]::HtmlEncode($idText))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Workload))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Description))</td><td>$([System.Net.WebUtility]::HtmlEncode($current))</td><td>$([System.Net.WebUtility]::HtmlEncode($desired))</td><td>$compliantText</td><td>$($r.Automatable)</td>$extra</tr>"
+        "<tr><td>$([System.Net.WebUtility]::HtmlEncode($idText))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Workload))</td><td>$([System.Net.WebUtility]::HtmlEncode($r.Description))</td><td>$([System.Net.WebUtility]::HtmlEncode($current))</td><td>$([System.Net.WebUtility]::HtmlEncode($desired))</td><td$compliantClass>$compliantText</td><td>$($r.Automatable)</td>$extra</tr>"
     }
 
     $extraHeader = if ($ApplyResults) { '<th>Action Taken</th><th>Result</th>' } else { '<th>Notes</th>' }
@@ -1877,8 +1883,14 @@ th, td {
 }
 th { background: #f2f2f2; }
 tr:nth-child(even) { background: #fafafa; }
-tr.manual-row { background: #fff3cd; }
-tr.manual-row:nth-child(even) { background: #ffe9a8; }
+/* Cell-level, not row-level: only the Result/Notes cell of a manual-review control
+   gets the amber background, and only the Compliant cell of a compliant control gets
+   the light-green one - see the rowsHtml comment above for why. A td's own background
+   always paints over the row's zebra-striping background above, regardless of CSS
+   specificity, so these stay visible on both odd and even rows without needing a
+   separate :nth-child variant the way the old whole-row highlight did. */
+td.manual-cell { background: #fff3cd; }
+td.compliant-yes { background: #d4edda; }
 .manual-summary { border: 1px solid #f0ad4e; background: #fff3cd; border-radius: 4px; padding: 0.75rem 1.25rem; margin-bottom: 1.5rem; }
 .manual-summary h2 { margin-top: 0; font-size: 1.1rem; }
 .manual-summary ul { margin-bottom: 0; }
