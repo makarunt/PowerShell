@@ -28,13 +28,22 @@ BeforeAll {
         foreach ($segment in $Path) {
             if ($null -eq $current) { return $null }
             if ($current -is [System.Collections.IDictionary]) {
-                if ($current.Contains($segment)) { $current = $current[$segment]; continue }
+                # .ContainsKey(), not .Contains(): a plain Hashtable exposes both with the
+                # same (key) -> bool meaning, but the real Microsoft.Graph SDK's
+                # AdditionalProperties is a generic Dictionary<string,object>, whose
+                # PUBLIC (non-explicit) .Contains(item) overload is inherited from
+                # ICollection<KeyValuePair<TKey,TValue>> and takes a KeyValuePair, not a
+                # bare key - calling it with one string argument throws "Cannot find an
+                # overload for 'Contains' and the argument count: 1". ContainsKey(key) is
+                # the one method both Hashtable and Dictionary<TKey,TValue> expose
+                # publicly with the same single-key-argument signature.
+                if ($current.ContainsKey($segment)) { $current = $current[$segment]; continue }
                 return $null
             }
             $direct = $current.PSObject.Properties[$segment]
             if ($direct) { $current = $direct.Value; continue }
             $additional = $current.PSObject.Properties['AdditionalProperties']
-            if ($additional -and $additional.Value -is [System.Collections.IDictionary] -and $additional.Value.Contains($segment)) {
+            if ($additional -and $additional.Value -is [System.Collections.IDictionary] -and $additional.Value.ContainsKey($segment)) {
                 $current = $additional.Value[$segment]
                 continue
             }
@@ -46,19 +55,21 @@ BeforeAll {
     # Companion to Get-BaselineTestGraphBodyValue: answers "was this field actually
     # sent" rather than "what's its value" - used to prove a Set- function's
     # -BodyParameter is a single-field PATCH that doesn't also touch a sibling
-    # field. A plain hashtable answers this with .Contains(); a real typed SDK
-    # object has every property slot present regardless, so a field that was never
-    # set stays at its type's default ($null for every nullable property these
-    # Graph models use) - "not sent" there means "still null", which also matches
-    # how these SDK types serialize to the wire (a null property is omitted from
-    # the JSON body, not sent as an explicit null).
+    # field. A plain hashtable answers this with .ContainsKey() (see the .Contains()
+    # vs .ContainsKey() note on Get-BaselineTestGraphBodyValue above - the same
+    # overload-resolution trap applies here); a real typed SDK object has every
+    # property slot present regardless, so a field that was never set stays at its
+    # type's default ($null for every nullable property these Graph models use) -
+    # "not sent" there means "still null", which also matches how these SDK types
+    # serialize to the wire (a null property is omitted from the JSON body, not
+    # sent as an explicit null).
     function Test-BaselineTestGraphBodyHasField {
         param([Parameter(Mandatory)][object]$Body, [Parameter(Mandatory)][string]$Name)
-        if ($Body -is [System.Collections.IDictionary]) { return $Body.Contains($Name) }
+        if ($Body -is [System.Collections.IDictionary]) { return $Body.ContainsKey($Name) }
         $prop = $Body.PSObject.Properties[$Name]
         if (-not $prop) {
             $additional = $Body.PSObject.Properties['AdditionalProperties']
-            if ($additional -and $additional.Value -is [System.Collections.IDictionary]) { return $additional.Value.Contains($Name) }
+            if ($additional -and $additional.Value -is [System.Collections.IDictionary]) { return $additional.Value.ContainsKey($Name) }
             return $false
         }
         return $null -ne $prop.Value

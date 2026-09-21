@@ -270,6 +270,16 @@ Context 'ConditionalAccessControls - idempotency and report-only enforcement' {
         Mock -CommandName Get-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -MockWith {
             @(New-FakeCAPolicy -Id 'toolkit-2' -DisplayName '[M365 Baseline] Block legacy authentication' -State 'enabled' -IncludeUsers @('All') -IncludeApplications @('All') -ExcludeGroups @('emergency-group-id') -ClientAppTypes @('exchangeActiveSync', 'other') -BuiltInControls @('block'))
         }
+        # Get-BaselineCAPolicyListCache caches its result ($script:CAPolicyListCache) as
+        # a module-scoped array, which stays non-null (empty, @()) rather than $null
+        # after the Created-path call above - a re-mocked Get-MgIdentityConditionalAccessPolicy
+        # never gets re-queried on its own, since the cache lookup's short-circuit is
+        # "$Refresh -or $null -eq $script:CAPolicyListCache", and an empty array is not
+        # null. Without this explicit -Refresh, Set-CA-BlockLegacyAuthState below would
+        # still see the stale empty cache, conclude the policy doesn't exist, and call
+        # New- a second time instead of Update- - exactly what a real-Pester run on a
+        # live workstation caught (Update- reported "called 0 times").
+        Get-BaselineCAPolicyListCache -Refresh | Out-Null
         Set-CA-BlockLegacyAuthState -DesiredValue $true -CurrentValue $false | Out-Null
         Should -Invoke -CommandName Update-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 1 -ParameterFilter {
             $BodyParameter.state -eq 'enabledForReportingButNotEnforced'
