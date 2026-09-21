@@ -167,7 +167,17 @@ Describe 'ExchangeOnline-AntiPhishing (split into a base-EOP control and a Defen
             if ($Identity) { return $policy }
             return @($policy)
         }
-        Mock -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -MockWith { }
+
+        # Captured directly from the mock's own $PSBoundParameters rather than
+        # inspected later via -ParameterFilter: Should -Invoke's ParameterFilter
+        # reconstructs bound parameters from Pester's recorded call history, which
+        # was observed (live, on a real Pester 6 run) to not reliably preserve
+        # which switch parameters were explicitly bound - the mock body's own
+        # $PSBoundParameters at invocation time has no such ambiguity.
+        $script:CapturedSetAntiPhishPolicyCalls = [System.Collections.Generic.List[object]]::new()
+        Mock -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -MockWith {
+            $script:CapturedSetAntiPhishPolicyCalls.Add(@($PSBoundParameters.Keys))
+        }
     }
 
     Context 'ExchangeOnline-AntiPhishingSpoofIntelligence (base EOP, no license gate)' {
@@ -177,11 +187,11 @@ Describe 'ExchangeOnline-AntiPhishing (split into a base-EOP control and a Defen
             $result = Set-ExchangeOnline-AntiPhishingSpoofIntelligenceState -DesiredValue ([pscustomobject]@{ enableSpoofIntelligence = $true }) -CurrentValue ([pscustomobject]@{ enableSpoofIntelligence = $false })
 
             $result.Status | Should -Be 'Success'
-            Should -Invoke -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -Times 1 -ParameterFilter {
-                $PSBoundParameters.ContainsKey('EnableSpoofIntelligence') -and
-                    -not $PSBoundParameters.ContainsKey('EnableMailboxIntelligence') -and
-                    -not $PSBoundParameters.ContainsKey('EnableMailboxIntelligenceProtection')
-            }
+            Should -Invoke -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -Times 1
+            $script:CapturedSetAntiPhishPolicyCalls.Count | Should -Be 1
+            $script:CapturedSetAntiPhishPolicyCalls[0] | Should -Contain 'EnableSpoofIntelligence'
+            $script:CapturedSetAntiPhishPolicyCalls[0] | Should -Not -Contain 'EnableMailboxIntelligence'
+            $script:CapturedSetAntiPhishPolicyCalls[0] | Should -Not -Contain 'EnableMailboxIntelligenceProtection'
         }
     }
 
@@ -206,11 +216,11 @@ Describe 'ExchangeOnline-AntiPhishing (split into a base-EOP control and a Defen
             $result = Set-ExchangeOnline-AntiPhishingMailboxIntelligenceState -DesiredValue ([pscustomobject]@{ enableMailboxIntelligence = $true; enableMailboxIntelligenceProtection = $true }) -CurrentValue ([pscustomobject]@{ enableMailboxIntelligence = $false; enableMailboxIntelligenceProtection = $false })
 
             $result.Status | Should -Be 'Success'
-            Should -Invoke -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -Times 1 -ParameterFilter {
-                $PSBoundParameters.ContainsKey('EnableMailboxIntelligence') -and
-                    $PSBoundParameters.ContainsKey('EnableMailboxIntelligenceProtection') -and
-                    -not $PSBoundParameters.ContainsKey('EnableSpoofIntelligence')
-            }
+            Should -Invoke -CommandName Set-AntiPhishPolicy -ModuleName ExchangeOnlineControls -Times 1
+            $script:CapturedSetAntiPhishPolicyCalls.Count | Should -Be 1
+            $script:CapturedSetAntiPhishPolicyCalls[0] | Should -Contain 'EnableMailboxIntelligence'
+            $script:CapturedSetAntiPhishPolicyCalls[0] | Should -Contain 'EnableMailboxIntelligenceProtection'
+            $script:CapturedSetAntiPhishPolicyCalls[0] | Should -Not -Contain 'EnableSpoofIntelligence'
         }
 
         It 'proceeds when THREAT_INTELLIGENCE (Defender for O365 Plan 2) is present instead' {
