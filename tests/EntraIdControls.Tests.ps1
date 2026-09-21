@@ -9,6 +9,60 @@
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../modules/BaselineCore.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot '../modules/EntraIdControls.psm1') -Force
+
+    # Resolves a dotted-path nested value out of a Graph -BodyParameter argument
+    # regardless of whether it landed as a directly-modeled property (works for a
+    # plain hashtable - the shape Set- always builds, and the shape a mocked
+    # command's -BodyParameter stays as when the real Microsoft.Graph module
+    # ISN'T installed, since Pester's mock proxy then has no typed parameter to
+    # coerce the hashtable against) or inside .AdditionalProperties (the shape it
+    # lands in when the real module IS installed and its currently-installed SDK
+    # version doesn't yet model that specific field as a typed property - observed
+    # for systemCredentialPreferences on a real workstation: PowerShell's own
+    # parameter-type coercion, triggered by Pester's mock proxy inheriting the
+    # real cmdlet's typed -BodyParameter, routes any hashtable key the typed class
+    # doesn't recognize into .AdditionalProperties instead of failing outright).
+    function Get-BaselineTestGraphBodyValue {
+        param([Parameter(Mandatory)][object]$Body, [Parameter(Mandatory)][string[]]$Path)
+        $current = $Body
+        foreach ($segment in $Path) {
+            if ($null -eq $current) { return $null }
+            if ($current -is [System.Collections.IDictionary]) {
+                if ($current.Contains($segment)) { $current = $current[$segment]; continue }
+                return $null
+            }
+            $direct = $current.PSObject.Properties[$segment]
+            if ($direct) { $current = $direct.Value; continue }
+            $additional = $current.PSObject.Properties['AdditionalProperties']
+            if ($additional -and $additional.Value -is [System.Collections.IDictionary] -and $additional.Value.Contains($segment)) {
+                $current = $additional.Value[$segment]
+                continue
+            }
+            return $null
+        }
+        return $current
+    }
+
+    # Companion to Get-BaselineTestGraphBodyValue: answers "was this field actually
+    # sent" rather than "what's its value" - used to prove a Set- function's
+    # -BodyParameter is a single-field PATCH that doesn't also touch a sibling
+    # field. A plain hashtable answers this with .Contains(); a real typed SDK
+    # object has every property slot present regardless, so a field that was never
+    # set stays at its type's default ($null for every nullable property these
+    # Graph models use) - "not sent" there means "still null", which also matches
+    # how these SDK types serialize to the wire (a null property is omitted from
+    # the JSON body, not sent as an explicit null).
+    function Test-BaselineTestGraphBodyHasField {
+        param([Parameter(Mandatory)][object]$Body, [Parameter(Mandatory)][string]$Name)
+        if ($Body -is [System.Collections.IDictionary]) { return $Body.Contains($Name) }
+        $prop = $Body.PSObject.Properties[$Name]
+        if (-not $prop) {
+            $additional = $Body.PSObject.Properties['AdditionalProperties']
+            if ($additional -and $additional.Value -is [System.Collections.IDictionary]) { return $additional.Value.Contains($Name) }
+            return $false
+        }
+        return $null -ne $prop.Value
+    }
 }
 
 Describe 'EntraID-GuestInviteRestriction' {
@@ -42,8 +96,19 @@ Describe 'EntraID-GuestInviteRestriction' {
 
             $result.Status | Should -Be 'Success'
             $result.AppliedValue | Should -Be 'adminsAndGuestInviters'
+            # authorizationPolicy is a singleton (see Set-EntraID-GuestInviteRestrictionState's
+            # own comment) - the real call is Update-MgPolicyAuthorizationPolicy -BodyParameter
+            # @{ allowInvitesFrom = ... } -ErrorAction Stop, with no -AuthorizationPolicyId or
+            # -AllowInvitesFrom parameter of its own. The value must be checked as a NESTED
+            # property of -BodyParameter, not as a top-level bound parameter - dot-access on
+            # $BodyParameter works whether it's still the plain hashtable Set- built (as it is
+            # when the real Microsoft.Graph module isn't installed, so Pester's mock proxy has
+            # no typed parameter to coerce it against) or has been coerced into the real
+            # Microsoft.Graph.PowerShell.Models.MicrosoftGraphAuthorizationPolicy type (as it is
+            # when that module IS installed, since Pester's mock proxy then inherits the real
+            # cmdlet's typed -BodyParameter and PowerShell coerces the hashtable accordingly).
             Should -Invoke -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -Times 1 -ParameterFilter {
-                $AllowInvitesFrom -eq 'adminsAndGuestInviters' -and $AuthorizationPolicyId -eq 'authorizationPolicy'
+                $BodyParameter.AllowInvitesFrom -eq 'adminsAndGuestInviters'
             }
         }
     }
@@ -116,8 +181,14 @@ Describe 'EntraID-AuthMethodsHardening' {
 
             $result.Status | Should -Be 'Success'
             Should -Invoke -CommandName Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -ModuleName EntraIdControls -Times 3
+            # See Get-BaselineTestGraphBodyValue in this file's BeforeAll: systemCredentialPreferences
+            # isn't (as of this writing) a typed property on every installed Microsoft.Graph SDK
+            # version, so it can land under $BodyParameter.AdditionalProperties instead of directly
+            # on $BodyParameter - a plain $BodyParameter.systemCredentialPreferences.state check
+            # would silently fail against a real Microsoft.Graph install even though the toolkit's
+            # actual call is correct.
             Should -Invoke -CommandName Update-MgPolicyAuthenticationMethodPolicy -ModuleName EntraIdControls -Times 1 -ParameterFilter {
-                $BodyParameter.systemCredentialPreferences.state -eq 'enabled'
+                (Get-BaselineTestGraphBodyValue -Body $BodyParameter -Path 'systemCredentialPreferences', 'state') -eq 'enabled'
             }
         }
 
@@ -223,8 +294,8 @@ Describe 'EntraID-BlockSelfServiceAppCreation / EntraID-BlockSelfServiceSecurity
         $result = Set-EntraID-BlockSelfServiceSecurityGroupCreationState -DesiredValue $false -CurrentValue $true
         $result.Status | Should -Be 'Success'
         Should -Invoke -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -Times 1 -ParameterFilter {
-            $BodyParameter.defaultUserRolePermissions.ContainsKey('allowedToCreateSecurityGroups') -and
-            -not $BodyParameter.defaultUserRolePermissions.ContainsKey('allowedToCreateApps')
+            (Test-BaselineTestGraphBodyHasField -Body $BodyParameter.defaultUserRolePermissions -Name 'allowedToCreateSecurityGroups') -and
+            -not (Test-BaselineTestGraphBodyHasField -Body $BodyParameter.defaultUserRolePermissions -Name 'allowedToCreateApps')
         }
     }
 }

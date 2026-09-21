@@ -476,6 +476,16 @@ None of this changes what gets applied or skipped — it's purely about making
 sure "this one needs a human" is impossible to miss, whether you're watching
 the console, skimming a report's top, or reading the full table.
 
+**The HTML report's table is also fixed-width and responsive**, not just
+highlighted. Columns use percentage widths (`table-layout: fixed` with a
+`<colgroup>`) instead of the browser default of auto-growing each column to
+fit its longest single-line value — which is what previously forced
+left-right scrolling to see the whole table, since `Current`/`Desired` often
+hold a compact JSON value. Long values now wrap onto multiple lines within
+their column instead. A scrollable wrapper around the table is still there as
+a safety net for a genuinely unbreakable value (a long token with no spaces),
+so only the table scrolls in that rare case, never the whole page.
+
 `EntraID-AuthMethodsHardening` and `EntraID-MfaRegistrationCampaign` **are**
 implemented as automatable, but Microsoft has changed the nested request-body
 shape for `Update-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration`

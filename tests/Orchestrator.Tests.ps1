@@ -363,6 +363,40 @@ Describe 'Manual-review highlighting in reports' {
                 Remove-Item $path -ErrorAction SilentlyContinue
             }
         }
+
+        It 'uses a fixed table layout with percentage column widths so the table fits the viewport instead of auto-growing wide columns' {
+            $path = [System.IO.Path]::GetTempFileName()
+            try {
+                Export-BaselineHtmlReport -AuditResults $script:ManualReviewAuditResults -Path $path -Title 'Test' | Out-Null
+                $content = Get-Content $path -Raw
+                $content | Should -Match 'table-layout:\s*fixed'
+                $content | Should -Match '<colgroup>'
+                $content | Should -Match 'overflow-wrap:\s*anywhere'
+                $content | Should -Match 'class="table-wrap"'
+                $content | Should -Match '@media \(max-width: 900px\)'
+            }
+            finally {
+                Remove-Item $path -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'uses a 9-column colgroup for an Apply/Restore report and an 8-column colgroup for a plain Audit report' {
+            $auditOnlyPath = [System.IO.Path]::GetTempFileName()
+            $applyPath = [System.IO.Path]::GetTempFileName()
+            try {
+                Export-BaselineHtmlReport -AuditResults $script:ManualReviewAuditResults -Path $auditOnlyPath -Title 'Test' | Out-Null
+                $applyResults = @($script:ManualReviewAuditResults | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Status = 'Success'; Message = '' } })
+                Export-BaselineHtmlReport -AuditResults $script:ManualReviewAuditResults -Path $applyPath -Title 'Test' -ApplyResults $applyResults | Out-Null
+
+                $auditOnlyColCount = ([regex]::Matches((Get-Content $auditOnlyPath -Raw), '<col ')).Count
+                $applyColCount = ([regex]::Matches((Get-Content $applyPath -Raw), '<col ')).Count
+                $auditOnlyColCount | Should -Be 8
+                $applyColCount | Should -Be 9
+            }
+            finally {
+                Remove-Item $auditOnlyPath, $applyPath -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 

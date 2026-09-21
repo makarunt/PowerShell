@@ -7,6 +7,8 @@
     neither Microsoft.Graph nor Microsoft.Graph.Identity.SignIns, is required.
 #>
 
+Describe 'ConditionalAccessControls' {
+
 BeforeAll {
     $script:ModulesDir = Join-Path $PSScriptRoot '../modules'
 
@@ -89,7 +91,7 @@ BeforeEach {
     }
 }
 
-Describe 'ConditionalAccessControls - licensing gate' {
+Context 'ConditionalAccessControls - licensing gate' {
 
     Context 'Entra ID Free tenant (no AAD_PREMIUM/AAD_PREMIUM_P2)' {
         BeforeEach {
@@ -154,7 +156,7 @@ Describe 'ConditionalAccessControls - licensing gate' {
     }
 }
 
-Describe 'ConditionalAccessControls - overlap detection' {
+Context 'ConditionalAccessControls - overlap detection' {
 
     BeforeEach {
         Mock -CommandName Get-MgSubscribedSku -ModuleName BaselineCore -MockWith { @(New-FakeSku -ServicePlanNames @('AAD_PREMIUM')) }
@@ -234,7 +236,7 @@ Describe 'ConditionalAccessControls - overlap detection' {
     }
 }
 
-Describe 'ConditionalAccessControls - idempotency and report-only enforcement' {
+Context 'ConditionalAccessControls - idempotency and report-only enforcement' {
 
     BeforeEach {
         Mock -CommandName Get-MgSubscribedSku -ModuleName BaselineCore -MockWith { @(New-FakeSku -ServicePlanNames @('AAD_PREMIUM_P2')) }
@@ -286,7 +288,7 @@ Describe 'ConditionalAccessControls - idempotency and report-only enforcement' {
     }
 }
 
-Describe 'ConditionalAccessControls - static guarantee: no code path ever writes state = enabled' {
+Context 'ConditionalAccessControls - static guarantee: no code path ever writes state = enabled' {
 
     It 'the module source never assigns the literal ''enabled'' to a policy state (only ''enabledForReportingButNotEnforced'')' {
         $source = Get-Content (Join-Path $script:ModulesDir 'ConditionalAccessControls.psm1') -Raw
@@ -302,7 +304,7 @@ Describe 'ConditionalAccessControls - static guarantee: no code path ever writes
     }
 }
 
-Describe 'ConditionalAccessControls - dynamic resolution (no hardcoded GUIDs)' {
+Context 'ConditionalAccessControls - dynamic resolution (no hardcoded GUIDs)' {
 
     BeforeEach {
         Mock -CommandName Get-MgSubscribedSku -ModuleName BaselineCore -MockWith { @(New-FakeSku -ServicePlanNames @('AAD_PREMIUM')) }
@@ -333,4 +335,6 @@ Describe 'ConditionalAccessControls - dynamic resolution (no hardcoded GUIDs)' {
         { Set-CA-RequireMfaAzureManagementState -DesiredValue $true -CurrentValue $false } | Should -Throw '*did not resolve*'
         Should -Invoke -CommandName New-MgIdentityConditionalAccessPolicy -ModuleName ConditionalAccessControls -Times 0
     }
+}
+
 }
