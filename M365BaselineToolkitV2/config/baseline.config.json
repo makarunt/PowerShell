@@ -1,0 +1,412 @@
+{
+  "schemaVersion": "1.0",
+  "baselineSource": "CIS Microsoft 365 Foundations Benchmark v7.0.0 MVP baseline (P1/base license floor)",
+  "controls": [
+    {
+      "id": "EntraID-UnifiedAuditLog",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Unified audit log ingestion is enabled tenant-wide."
+    },
+    {
+      "id": "EntraID-GlobalAdminCount",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": false,
+      "desiredValue": { "min": 2, "max": 4 },
+      "description": "Number of active Global Administrator role members stays within a safe range (enough for resilience, few enough to limit blast radius).",
+      "complianceMode": "Range",
+      "manualInstructions": "Entra admin center > Identity > Roles & administrators > Global Administrator > review and adjust role assignments."
+    },
+    {
+      "id": "EntraID-GuestInviteRestriction",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "adminsAndGuestInviters",
+      "description": "Only admins and users explicitly granted the guest inviter role can invite guest users."
+    },
+    {
+      "id": "EntraID-GuestUserRoleRestriction",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "2af84b1e-32c8-42b7-82bc-daa82404023b",
+      "description": "Guest users are placed in the Restricted Guest User role, limiting what they can see in the directory."
+    },
+    {
+      "id": "EntraID-BlockUserConsentToApps",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "permissionGrantPoliciesAssigned": [] },
+      "description": "Non-admin users cannot consent to applications requesting access to organizational data."
+    },
+    {
+      "id": "EntraID-BlockSelfServiceAppCreation",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "allowedToCreateApps": false, "allowedToCreateTenants": false },
+      "description": "Regular users cannot register new app registrations or create new Entra ID tenants."
+    },
+    {
+      "id": "EntraID-BlockSelfServiceSecurityGroupCreation",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": false,
+      "description": "Regular users cannot create security groups; only admins can."
+    },
+    {
+      "id": "EntraID-RestrictAdminPortalAccess",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": false,
+      "desiredValue": true,
+      "description": "Access to Entra ID / M365 admin portals is restricted to admins only (non-admins get an access-denied experience).",
+      "manualInstructions": "Entra admin center > Identity > Users > User settings > 'Restrict access to Microsoft Entra admin center' = Yes."
+    },
+    {
+      "id": "EntraID-AuthMethodsHardening",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "authenticatorEnabled": true, "smsEnabled": false, "voiceEnabled": false, "systemCredentialPreferences": { "state": "enabled" } },
+      "description": "Microsoft Authenticator is enabled as an authentication method while SMS and voice call methods are disabled tenant-wide, and system-preferred multifactor authentication (systemCredentialPreferences) is enabled. NOTE: Microsoft has been gradually rolling out this setting's sign-in-time effect tenant-by-tenant through roughly September 2026 - a tenant showing this configured but not yet visibly affecting sign-in prompts is not a configuration error."
+    },
+    {
+      "id": "EntraID-AdminConsentWorkflow",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": {
+        "isEnabled": true,
+        "notifyReviewers": true,
+        "remindersEnabled": true,
+        "requestDurationInDays": 30,
+        "reviewers": []
+      },
+      "description": "Users who are blocked from consenting to an application can submit a request for admin review, routed to a defined set of reviewers. REQUIRES CONFIGURATION: populate desiredValue.reviewers with real user/group/role query scopes (e.g. { \"query\": \"/v1.0/users/<id>\", \"queryType\": \"MicrosoftGraph\" }) before running Apply - Microsoft Graph has no safe default reviewer.",
+      "requiresPopulatedFields": ["reviewers"]
+    },
+    {
+      "id": "EntraID-MfaRegistrationCampaign",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": {
+        "state": "enabled",
+        "snoozeDurationInDays": 1,
+        "includeTargets": [
+          { "targetType": "group", "id": "all_users", "targetedAuthenticationMethod": "microsoftAuthenticator" }
+        ]
+      },
+      "description": "Users who have not registered strong MFA methods are nudged to do so at sign-in, with a short snooze window. Targets all users by default (Graph's documented 'all_users' special group id) - replace with a specific group id in includeTargets if you want to pilot with a subset first."
+    },
+    {
+      "id": "EntraID-AdminPasswordResetNotification",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": false,
+      "desiredValue": true,
+      "description": "Other admins are notified by email whenever an admin's password is reset.",
+      "manualInstructions": "Entra admin center > Protection > Authentication methods > Password reset > Notifications tab > 'Notify all admins when other admins reset their password?' = Yes."
+    },
+    {
+      "id": "EntraID-GaNotLocalAdminOnJoin",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": false,
+      "desiredValue": true,
+      "description": "The Global Administrator role does not implicitly become a local administrator on newly Entra-joined devices. Preview-labeled setting with no stable (v1.0) Graph/PowerShell API as of this writing - audit-only.",
+      "manualInstructions": "Entra admin center > Identity > Devices > Device settings > 'Additional local administrators on Microsoft Entra joined devices' (ensure Global Administrator is not implicitly granted local admin)."
+    },
+    {
+      "id": "ExchangeOnline-ExternalSenderTag",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Outlook tags messages from external senders so users can spot them at a glance."
+    },
+    {
+      "id": "ExchangeOnline-MailboxAuditingDefault",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Mailbox auditing is enabled by default for all mailboxes in the organization."
+    },
+    {
+      "id": "ExchangeOnline-AntiSpamInbound",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "bulkThreshold": 6, "highConfidenceSpamAction": "Quarantine", "spamAction": "Quarantine" },
+      "description": "Inbound anti-spam policy quarantines high-confidence spam and uses a strict bulk-mail threshold."
+    },
+    {
+      "id": "ExchangeOnline-AntiPhishingSpoofIntelligence",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "enableSpoofIntelligence": true },
+      "description": "Anti-phishing policy has spoof intelligence enabled. Base Exchange Online Protection (EOP) - available on every Exchange Online plan, including Microsoft 365 Business Basic/Standard."
+    },
+    {
+      "id": "ExchangeOnline-AntiPhishingMailboxIntelligence",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "enableMailboxIntelligence": true, "enableMailboxIntelligenceProtection": true },
+      "description": "Anti-phishing policy has mailbox intelligence and mailbox-intelligence-based impersonation protection enabled. Requires Defender for Office 365 Plan 1 or 2 - NOT included on Exchange Online Plan 1/2 alone or Microsoft 365 Business Basic/Standard. Skipped (Skipped-LicenseInsufficient) rather than failed on a tenant without that add-on."
+    },
+    {
+      "id": "ExchangeOnline-AntiMalwareAttachmentFilter",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "The malware filter policy blocks common dangerous attachment file types."
+    },
+    {
+      "id": "ExchangeOnline-DisableAutoForwarding",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "Off",
+      "description": "Automatic forwarding of mail to external domains is blocked tenant-wide."
+    },
+    {
+      "id": "ExchangeOnline-DisableSmtpAuth",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "Tenant-wide basic authentication for SMTP AUTH clients is disabled."
+    },
+    {
+      "id": "ExchangeOnline-DkimSigning",
+      "workload": "ExchangeOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "domains": [] },
+      "description": "DKIM signing is enabled for every accepted domain that sends mail. REQUIRES CONFIGURATION: populate desiredValue.domains with your organization's accepted domain names before running Apply - this cannot have a safe universal default.",
+      "requiresPopulatedFields": ["domains"]
+    },
+    {
+      "id": "Teams-BlockConsumerContact",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "allowTeamsConsumer": false, "allowTeamsConsumerInbound": false, "externalAccessWithTrialTenants": "Blocked" },
+      "description": "Users cannot communicate with or accept contact requests from unmanaged consumer Teams/Skype accounts, and federation with trial-only tenants is blocked. NOTE: Microsoft made 'Blocked' the tenant-wide default for trial-tenant access starting July 29, 2024, so many tenants may already read compliant here - it's still asserted explicitly rather than relying on the inherited default."
+    },
+    {
+      "id": "Teams-RestrictFederation",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "mode": "AllowSpecific", "allowedDomains": [] },
+      "description": "External Teams federation is restricted to an explicit allow-list of partner domains. REQUIRES CONFIGURATION: an empty allowedDomains list with mode 'AllowSpecific' blocks federation with every external domain - populate allowedDomains, or run Apply with -AcknowledgeFederationBlockAll if a full block is genuinely intended.",
+      "requiresPopulatedFields": ["allowedDomains"]
+    },
+    {
+      "id": "Teams-MeetingJoinDefaults",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "autoAdmittedUsers": "EveryoneInCompanyExcludingGuests", "allowAnonymousUsersToJoinMeeting": false, "allowAnonymousUsersToStartMeeting": false, "allowPSTNUsersToBypassLobby": false },
+      "description": "Meeting lobby defaults keep anonymous users out, require internal users to be admitted automatically only within the org, prevent anonymous users from starting a meeting, and prevent PSTN callers from bypassing the lobby."
+    },
+    {
+      "id": "Teams-AppPermissionPolicy",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "globalCatalogAppsType": "BlockedAppList" },
+      "description": "Third-party Teams apps from the global catalog are blocked by default (allow-list model)."
+    },
+    {
+      "id": "Teams-GuestAccessDefault",
+      "workload": "Teams",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": false,
+      "description": "Guest access to Teams is disabled tenant-wide by default."
+    },
+    {
+      "id": "SharePointOnline-SharingCapability",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "ExternalUserSharingOnly",
+      "description": "Tenant-wide external sharing ceiling for SharePoint and OneDrive is limited to existing guests (no anonymous links)."
+    },
+    {
+      "id": "SharePointOnline-DefaultSharingLinkType",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "Direct",
+      "description": "The default sharing link type is 'Specific people' rather than broad org-wide or anonymous links."
+    },
+    {
+      "id": "SharePointOnline-DefaultLinkPermission",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": "View",
+      "description": "The default permission granted by a new sharing link is view-only, not edit."
+    },
+    {
+      "id": "SharePointOnline-AnonymousLinkExpiration",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": 30,
+      "description": "Anonymous 'Anyone' links automatically expire after 30 days."
+    },
+    {
+      "id": "SharePointOnline-GuestAccessExpiration",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "externalUserExpirationRequired": true, "externalUserExpireInDays": 30 },
+      "description": "Distinct from SharePointOnline-AnonymousLinkExpiration above (that control governs anonymous 'Anyone' link expiration only): named external guest ACCOUNTS lose access automatically after 30 days. Grouped here for readability; a separate tenant property and a separate control id."
+    },
+    {
+      "id": "SharePointOnline-GuestReauthentication",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "emailAttestationRequired": true, "emailAttestationReAuthDays": 15 },
+      "description": "External guests must re-verify their identity via an emailed one-time passcode every 15 days to retain access."
+    },
+    {
+      "id": "SharePointOnline-AzureADB2BIntegration",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "mechanismPossiblyDeprecated": true,
+      "desiredValue": true,
+      "description": "SharePoint/OneDrive external sharing is integrated with Entra ID (Azure AD) B2B invitations. NOTE: Microsoft has been auto-migrating tenants onto Entra B2B integration since May 2026 on an unannounced per-tenant schedule; once migrated, Set-SPOTenant's call here can become a silent no-op that still reports success. Flagged mechanismPossiblyDeprecated so a persistent post-apply mismatch is reported as MechanismPossiblyDeprecated rather than an ordinary failure - see README."
+    },
+    {
+      "id": "SharePointOnline-PreventGuestResharing",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": true,
+      "description": "External (guest) users cannot reshare files/folders they only have access to via sharing. A community-reported propagation delay can leave Get-SPOTenant showing the prior value briefly after an apparently successful apply - see README's read-back-and-classify note (Applied-PendingConfirmation)."
+    },
+    {
+      "id": "SharePointOnline-LegacyAuthProtocols",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": false,
+      "description": "Legacy (non-modern-auth) client protocols are blocked from accessing SharePoint and OneDrive."
+    },
+    {
+      "id": "SharePointOnline-IdleSessionSignOut",
+      "workload": "SharePointOnline",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "enabled": true, "warnAfterMinutes": 15, "signOutAfterMinutes": 20 },
+      "description": "Idle browser sessions in SharePoint/OneDrive are warned and then signed out automatically."
+    },
+    {
+      "id": "M365AdminCenter-SwayExternalSharing",
+      "workload": "M365AdminCenter",
+      "enabled": true,
+      "automatable": false,
+      "desiredValue": false,
+      "description": "Sway external sharing is disabled - people in the organization cannot share their Sways with people outside the organization. No PowerShell/Graph API exists for this setting - audit-only.",
+      "manualInstructions": "Microsoft 365 admin center > Settings > Org settings > Services > Sway > uncheck 'Let people in your organization share their sways with people outside your organization.'"
+    },
+    {
+      "id": "CA-RequireMfaAllUsers",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for all users on all cloud apps. Requires Entra ID P1. Created in state=enabledForReportingButNotEnforced - never enabled/enforced by this toolkit; a tenant admin reviews the report-only sign-in logs and enables it manually when ready."
+    },
+    {
+      "id": "CA-RequireMfaAdminRoles",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for the 14 privileged directory roles (Global Administrator, Privileged Role Administrator, etc). Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-BlockLegacyAuth",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy blocking legacy authentication (Exchange ActiveSync and other legacy clients) for all users on all cloud apps. Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequireMfaAzureManagement",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for all users accessing the Microsoft Azure Management app (Azure Portal/CLI/PowerShell/REST). Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequireMfaSecurityInfoRegistration",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA when a user registers security info (the 'register security information' user action). Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequireMfaGuestAccess",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 1,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for guest and external users of every type, on all cloud apps. Requires Entra ID P1. Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequireMfaSignInRisk",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 2,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA for medium or high sign-in risk. Requires Entra ID P2 (Identity Protection risk signals). Report-only - see CA-RequireMfaAllUsers."
+    },
+    {
+      "id": "CA-RequirePasswordChangeUserRisk",
+      "workload": "ConditionalAccess",
+      "enabled": true,
+      "automatable": true,
+      "tier": 2,
+      "forceCreateDespiteOverlap": false,
+      "desiredValue": true,
+      "description": "Report-only Conditional Access policy requiring MFA and a password change for high user risk. Requires Entra ID P2 (Identity Protection risk signals). Report-only means this never actually forces a password change - it only logs what would have happened. Report-only - see CA-RequireMfaAllUsers."
+    }
+  ]
+}
