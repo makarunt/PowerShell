@@ -6,21 +6,20 @@ Exchange Online, Teams, OneDrive for Business, SharePoint Online, and the
 M365 Admin Center's org-wide settings. It is idempotent, safe to re-run, and
 always backs up current state before changing anything.
 
-**This is v2.** `M365BaselineToolkitV2` (this folder) and `M365BaselineToolkit`
-(v1) are sibling folders at the repository root. v1 is the original,
-unmodified toolkit and stays exactly as it was — v2 is a fork of it with a
-larger control set, its own `config/baseline.config.json`, and its own tests;
-the two do not share a config file or a running instance. See
-[`../VERSIONS.md`](../VERSIONS.md) at the repository root for the full
-versioning rationale and a side-by-side control-count comparison. If you're
-looking for the original, smaller v1 baseline, it's unchanged in
-`../M365BaselineToolkit/README.md`.
+**This is v2.** It started life as a fork of v1 (`M365BaselineToolkit`),
+built out with a larger control set, its own `config/baseline.config.json`,
+and its own tests, then split into this standalone branch history once v2
+was stable — the two no longer share a config file, a running instance, or
+a checkout. v1 remains available, unmodified, in the `M365BaselineToolkit/`
+folder of the [makarunt/PowerShell](https://github.com/makarunt/PowerShell)
+repository this was split from, if you're looking for the original, smaller
+baseline.
 
 ## What's new in v2
 
 v2 adds seven new controls, extends three existing ones with additional
 fields, and introduces a new workload module and two new report statuses.
-None of this touches v1 - see `VERSIONS.md`.
+None of this touched v1, back when the two were built side by side.
 
 **New controls:**
 
@@ -714,11 +713,10 @@ Invoke-Pester -Path ./tests
   summary section present/absent, row-level `⚠` marking in the Markdown
   report, and cell-level `manual-cell`/`compliant-yes` marking in the HTML
   report.
-- `V1Integrity.Tests.ps1` — new in v2, the mechanical proof that v1 is
-  untouched: re-hashes every file `../M365BaselineToolkit` (v1) currently has
-  against `v1-baseline-hashes.json` (captured via `git ls-files | Get-FileHash`
-  at the moment v2 was forked), and separately asserts v1's tracked file list
-  and git working tree haven't changed. See `VERSIONS.md`.
+- v2 used to carry `V1Integrity.Tests.ps1`, a mechanical proof that v1 stayed
+  untouched while both lived as sibling folders in one checkout. Removed once
+  v2 was split into this standalone branch history — v1 is no longer present
+  in this checkout for it to compare against.
 
 **A note on how this was built and verified.** The development sandbox used
 to write this toolkit could not reach PowerShellGallery (network policy), so
