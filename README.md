@@ -1,4 +1,4 @@
-# M365 Baseline Toolkit (v2)
+# M365 Baseline Toolkit
 
 A PowerShell toolkit that applies, audits, and can roll back a minimum-viable
 security/governance baseline across a Microsoft 365 tenant's Entra ID,
@@ -6,59 +6,41 @@ Exchange Online, Teams, OneDrive for Business, SharePoint Online, and the
 M365 Admin Center's org-wide settings. It is idempotent, safe to re-run, and
 always backs up current state before changing anything.
 
-**This is v2.** It started life as a fork of v1 (`M365BaselineToolkit`),
-built out with a larger control set, its own `config/baseline.config.json`,
-and its own tests, then split into this standalone branch history once v2
-was stable — the two no longer share a config file, a running instance, or
-a checkout. v1 remains available, unmodified, in the `M365BaselineToolkit/`
-folder of the [makarunt/PowerShell](https://github.com/makarunt/PowerShell)
-repository this was split from, if you're looking for the original, smaller
-baseline.
+## Controls worth extra attention
 
-## What's new in v2
-
-v2 adds seven new controls, extends three existing ones with additional
-fields, and introduces a new workload module and two new report statuses.
-None of this touched v1, back when the two were built side by side.
-
-**New controls:**
+Some controls need tenant-specific configuration, have known Microsoft-side
+quirks, or otherwise deserve a closer read before running Apply against them.
 
 | Control | Workload | Notes |
 |---|---|---|
 | `EntraID-AdminConsentWorkflow` | EntraID | Requires `desiredValue.reviewers` to be populated before Apply will run - see "`Automatable: false` controls" below for the pattern this follows. |
 | `EntraID-GaNotLocalAdminOnJoin` | EntraID | Audit-only: Preview feature, no stable (v1.0) Graph/PowerShell API as of this writing. |
-| `M365AdminCenter-SwayExternalSharing` | M365AdminCenter (new module, see below) | Audit-only: no PowerShell/Graph API exists for this setting at all. |
+| `M365AdminCenter-SwayExternalSharing` | M365AdminCenter | Audit-only: no PowerShell/Graph API exists for this setting at all. |
 | `SharePointOnline-AzureADB2BIntegration` | SharePointOnline | See "Azure AD B2B integration: a known Microsoft-side deprecation" below - read this before treating a post-apply mismatch as a bug. |
 | `SharePointOnline-PreventGuestResharing` | SharePointOnline | Can show a propagation-delay mismatch right after a successful apply - see "Report statuses" below. |
-| `SharePointOnline-GuestAccessExpiration` | SharePointOnline | Named guest ACCOUNT expiration - distinct from the pre-existing `SharePointOnline-AnonymousLinkExpiration`, which only governs anonymous "Anyone" links. |
+| `SharePointOnline-GuestAccessExpiration` | SharePointOnline | Named guest ACCOUNT expiration - distinct from `SharePointOnline-AnonymousLinkExpiration`, which only governs anonymous "Anyone" links. |
 | `SharePointOnline-GuestReauthentication` | SharePointOnline | Email one-time-passcode reauthentication for guests. |
+| `Teams-BlockConsumerContact` | Teams | Includes `externalAccessWithTrialTenants` — Microsoft made `"Blocked"` the tenant-wide default starting July 29, 2024, so this may already read compliant on many tenants; it's still asserted explicitly rather than relying on the inherited default. |
+| `Teams-MeetingJoinDefaults` | Teams | Includes `allowAnonymousUsersToStartMeeting`, `allowPSTNUsersToBypassLobby`. |
 
-**Extended controls** (same control id, new fields added to `desiredValue`):
-
-| Control | New field(s) |
-|---|---|
-| `Teams-BlockConsumerContact` | `externalAccessWithTrialTenants` — Microsoft made `"Blocked"` the tenant-wide default starting July 29, 2024, so this may already read compliant on many tenants; it's still asserted explicitly rather than relying on the inherited default. |
-| `Teams-MeetingJoinDefaults` | `allowAnonymousUsersToStartMeeting`, `allowPSTNUsersToBypassLobby` |
-
-**A deliberate deviation from the original v2 gap analysis:** that analysis
-asked for `allowedToCreateSecurityGroups` to be folded into
-`EntraID-BlockSelfServiceAppCreation`'s existing `Update-MgPolicyAuthorizationPolicy`
-call. This toolkit already had a separate, working
-`EntraID-BlockSelfServiceSecurityGroupCreation` control for that exact field
-before v2 existed. Literally merging it in as asked would have left two
-controls independently PATCHing sibling properties of the same
+**A deliberate design decision:** `allowedToCreateSecurityGroups` could have
+been folded into `EntraID-BlockSelfServiceAppCreation`'s existing
+`Update-MgPolicyAuthorizationPolicy` call. This toolkit already has a
+separate, working `EntraID-BlockSelfServiceSecurityGroupCreation` control for
+that exact field. Merging them would leave two controls independently
+PATCHing sibling properties of the same
 `authorizationPolicy.defaultUserRolePermissions` sub-object within one Apply
 run - the same write-interference failure pattern (only the first and last of
 several sequential writes to that resource actually persisting) that was
 root-caused, though never fully resolved, during this project's now-removed
-app-only-authentication work. v2 keeps the two controls separate instead. See
+app-only-authentication work. The two controls are kept separate instead. See
 the comment on `Get-EntraID-BlockSelfServiceAppCreationState` in
 `EntraIdControls.psm1` for the full reasoning.
 
 ### The M365 Admin Center workload
 
-`M365AdminCenterControls.psm1` is a new, dedicated (if currently small)
-module for org-wide settings that live under the Microsoft 365 admin center's
+`M365AdminCenterControls.psm1` is a dedicated (if currently small) module for
+org-wide settings that live under the Microsoft 365 admin center's
 "Org settings" rather than any specific workload's own admin center. It's
 broken out as its own module - rather than folded into `EntraIdControls.psm1`
 or elsewhere - because this workload is likely to gain more controls over
@@ -73,18 +55,18 @@ speculatively ahead of an actual need.
 ### Report statuses: `Skipped-Manual`, `Applied-PendingConfirmation`, `MechanismPossiblyDeprecated`
 
 Every Apply/Restore result carries a `Status`. Three of them matter for
-reading a v2 report correctly - `Skipped-Manual` already existed in v1;
-`Applied-PendingConfirmation` and `MechanismPossiblyDeprecated` are new in
-v2, produced only by a generic post-apply read-back-and-classify helper
-(`Test-BaselineApplyOutcome` in `BaselineCore.psm1`), never returned directly
-by a control's own `Set-` function:
+reading a report correctly. `Applied-PendingConfirmation` and
+`MechanismPossiblyDeprecated` are produced only by a generic post-apply
+read-back-and-classify helper (`Test-BaselineApplyOutcome` in
+`BaselineCore.psm1`), never returned directly by a control's own `Set-`
+function:
 
 - **`Skipped-Manual`** — no automated remediation exists for this control
   (`automatable: false` in config). Apply/Restore never call its `Set-`
   function at all; the report shows the exact GUI path from
-  `manualInstructions` instead. Unchanged from v1; now also used by the two
-  new audit-only controls (`EntraID-GaNotLocalAdminOnJoin`,
-  `M365AdminCenter-SwayExternalSharing`).
+  `manualInstructions` instead. Used by the audit-only controls
+  (`EntraID-GaNotLocalAdminOnJoin`, `M365AdminCenter-SwayExternalSharing`,
+  among others).
 - **`Applied-PendingConfirmation`** — the `Set-` call itself succeeded (no
   exception), but a follow-up read-back of the control's live value (with one
   short retry) still didn't match the desired value. This is *not* the same
@@ -153,22 +135,21 @@ new control needs a new `Get-`/`Set-` function pair.
 **Config file layout.**
 
 ```
-/M365BaselineToolkitV2
-  Invoke-M365Baseline.ps1          # entry point, all 3 modes
-  /config
-    baseline.config.json           # desired-state data (edit this to change behavior)
-    baseline.config.schema.json    # JSON Schema used to validate it
-  /modules
-    BaselineCore.psm1              # orchestration, connections, compliance, reports, backup/restore
-    EntraIdControls.psm1
-    ExchangeOnlineControls.psm1
-    TeamsControls.psm1
-    SharePointOnlineControls.psm1
-    ConditionalAccessControls.psm1
-    M365AdminCenterControls.psm1   # new in v2 - see "What's new in v2" above
-  /tests                           # Pester 5 suite, fully mocked, no live tenant needed
-  /reports                         # created at runtime, timestamped, never overwritten
-  /backups                         # created at runtime, timestamped, never overwritten
+Invoke-M365Baseline.ps1          # entry point, all 3 modes
+/config
+  baseline.config.json           # desired-state data (edit this to change behavior)
+  baseline.config.schema.json    # JSON Schema used to validate it
+/modules
+  BaselineCore.psm1              # orchestration, connections, compliance, reports, backup/restore
+  EntraIdControls.psm1
+  ExchangeOnlineControls.psm1
+  TeamsControls.psm1
+  SharePointOnlineControls.psm1
+  ConditionalAccessControls.psm1
+  M365AdminCenterControls.psm1
+/tests                           # Pester 5 suite, fully mocked, no live tenant needed
+/reports                         # created at runtime, timestamped, never overwritten
+/backups                         # created at runtime, timestamped, never overwritten
 ```
 
 **Why JSON, not `.psd1`, for the config.** JSON is easy to diff in a pull
@@ -433,8 +414,8 @@ etc.). Every validation failure names the specific control id and field.
 
 ## `Automatable: false` controls
 
-Five controls in this inventory (three from v1, two new in v2) have no safe
-or currently-documented automated remediation. They are always read and
+Five controls in this inventory have no safe or currently-documented
+automated remediation. They are always read and
 reported on in every Audit (so you can see their current value), but
 Apply/Restore never attempt to change them — instead they log
 `Skipped-Manual` with the exact place to fix it by hand:
@@ -444,8 +425,8 @@ Apply/Restore never attempt to change them — instead they log
 | `EntraID-GlobalAdminCount` | Entra admin center → Identity → Roles & administrators → Global Administrator (headcount judgment call; not something to automate) |
 | `EntraID-RestrictAdminPortalAccess` | Entra admin center → Identity → Users → User settings → "Restrict access to Microsoft Entra admin center" |
 | `EntraID-AdminPasswordResetNotification` | Entra admin center → Protection → Authentication methods → Password reset → Notifications tab → "Notify all admins when other admins reset their password?" |
-| `EntraID-GaNotLocalAdminOnJoin` *(v2)* | Entra admin center → Identity → Devices → Device settings → "Additional local administrators on Microsoft Entra joined devices" — Preview feature, no stable (v1.0) Graph/PowerShell API as of this writing |
-| `M365AdminCenter-SwayExternalSharing` *(v2)* | Microsoft 365 admin center → Settings → Org settings → Services → Sway → uncheck "Let people in your organization share their sways with people outside your organization" — no PowerShell/Graph API exists for this setting at all |
+| `EntraID-GaNotLocalAdminOnJoin` | Entra admin center → Identity → Devices → Device settings → "Additional local administrators on Microsoft Entra joined devices" — Preview feature, no stable (v1.0) Graph/PowerShell API as of this writing |
+| `M365AdminCenter-SwayExternalSharing` | Microsoft 365 admin center → Settings → Org settings → Services → Sway → uncheck "Let people in your organization share their sways with people outside your organization" — no PowerShell/Graph API exists for this setting at all |
 
 `EntraID-RestrictAdminPortalAccess`, `EntraID-GaNotLocalAdminOnJoin`, and
 `M365AdminCenter-SwayExternalSharing` have no confirmed, stable API to *read*
@@ -454,9 +435,8 @@ as of this writing, so their Audit report shows `Current: (none)` /
 fabricates a reading it can't back with a real API call.
 `EntraID-AdminPasswordResetNotification` is the same way as of this writing.
 
-**These controls are highlighted everywhere v2 tells you about them - new in
-v2** (v1 only ever mixed a `Manual: ...` note into a table cell you'd have to
-scroll to find):
+**These controls are highlighted everywhere this toolkit tells you about
+them**, not just mixed into a table cell you'd have to scroll to find:
 
 - **Console.** Audit, Apply, *and* Restore all print a `⚠ Manual review
   required` block right after the run summary, listing every such control by
@@ -682,41 +662,37 @@ Invoke-Pester -Path ./tests
   `GlobalAdminCount`, `AuthMethodsHardening`, `MailboxAuditingDefault`,
   `DkimSigning`, `DisableSmtpAuth`) exercised with `Mock`, including the
   idempotent no-op path and the DKIM empty-domain-list guard.
-  `EntraIdControls.Tests.ps1` also covers all three v2-new/extended EntraID
-  controls (`AdminConsentWorkflow` including its empty-reviewers hard-fail,
+  `EntraIdControls.Tests.ps1` also covers the additional EntraID controls
+  (`AdminConsentWorkflow` including its empty-reviewers hard-fail,
   `GaNotLocalAdminOnJoin`, `AuthMethodsHardening`'s Skipped-Manual behavior)
   and the `BlockSelfServiceAppCreation`/`BlockSelfServiceSecurityGroupCreation`
   overlap decision above.
-- `SharePointOnlineControls.Tests.ps1` / `TeamsControls.Tests.ps1` — new in
-  v2: the four new SharePoint controls, the two extended Teams controls (with
-  explicit field-preservation assertions confirming the extension didn't
-  silently drop a pre-existing field), and an integration test proving the
+- `SharePointOnlineControls.Tests.ps1` / `TeamsControls.Tests.ps1` — the
+  four SharePoint controls, the two extended Teams controls (with explicit
+  field-preservation assertions confirming the extension didn't silently
+  drop a pre-existing field), and an integration test proving the
   `mechanismPossiblyDeprecated` flag routes a persistent post-apply mismatch
   to `MechanismPossiblyDeprecated` for `SharePointOnline-AzureADB2BIntegration`
   and to the ordinary `Applied-PendingConfirmation` for
   `SharePointOnline-PreventGuestResharing` (not flagged).
-- `M365AdminCenterControls.Tests.ps1` — new in v2: the audit-only contract
-  for `M365AdminCenter-SwayExternalSharing` and its catalog/connection wiring.
+- `M365AdminCenterControls.Tests.ps1` — the audit-only contract for
+  `M365AdminCenter-SwayExternalSharing` and its catalog/connection wiring.
 - `Orchestrator.Tests.ps1` — compliance diffing (`Compliant`/`NonCompliant`/
   `Unknown` classification, `Range` mode, deep object comparison), that
   `Invoke-BaselineControlApply` correctly classifies
   `Skipped-AlreadyCompliant` / `Skipped-Manual` / `Success` / `Failed`, and
   that Restore mode calls `Set-` with the *snapshot's* recorded value, not
-  the live config's `desiredValue`. New in v2: a dedicated block of tests for
-  `Test-BaselineApplyOutcome` (the generic read-back-and-classify helper) —
-  match-on-retry, persistent mismatch with and without the
+  the live config's `desiredValue`. Also includes a dedicated block of tests
+  for `Test-BaselineApplyOutcome` (the generic read-back-and-classify
+  helper) — match-on-retry, persistent mismatch with and without the
   `mechanismPossiblyDeprecated` flag, a genuine thrown `Set-` error staying
   `Failed` and never reaching the helper at all, and StrictMode-safety
   against a hand-built catalog entry with no `MechanismPossiblyDeprecated`
-  property. Also new in v2: a block of tests for the manual-review/compliant
-  report highlighting described under "`Automatable: false` controls" above -
+  property — plus a block of tests for the manual-review/compliant report
+  highlighting described under "`Automatable: false` controls" above -
   summary section present/absent, row-level `⚠` marking in the Markdown
   report, and cell-level `manual-cell`/`compliant-yes` marking in the HTML
   report.
-- v2 used to carry `V1Integrity.Tests.ps1`, a mechanical proof that v1 stayed
-  untouched while both lived as sibling folders in one checkout. Removed once
-  v2 was split into this standalone branch history — v1 is no longer present
-  in this checkout for it to compare against.
 
 **A note on how this was built and verified.** The development sandbox used
 to write this toolkit could not reach PowerShellGallery (network policy), so
