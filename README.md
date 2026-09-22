@@ -31,7 +31,7 @@ around.
 | [`EntraID-RestrictAdminPortalAccess`](#automatable-false-controls) \* | Manual | Admin portal access is restricted to admins only. |
 | [`EntraID-AuthMethodsHardening`](#automatable-false-controls) \* | Manual | Microsoft Authenticator enabled, SMS/Voice disabled tenant-wide. |
 | `EntraID-AdminConsentWorkflow` \* | Automated | Blocked app-consent requests route to admin reviewers - needs `desiredValue.reviewers` populated first. |
-| `EntraID-MfaRegistrationCampaign` | Automated | Users without strong MFA registered are nudged to register it at sign-in. |
+| [`EntraID-MfaRegistrationCampaign`](#automatable-false-controls) \* | Manual | Users without strong MFA registered are nudged to register it at sign-in. |
 | [`EntraID-AdminPasswordResetNotification`](#automatable-false-controls) \* | Manual | Other admins are notified whenever an admin's password is reset. |
 | [`EntraID-GaNotLocalAdminOnJoin`](#automatable-false-controls) \* | Manual | Global Administrator doesn't implicitly become local admin on Entra-joined devices. |
 
@@ -46,7 +46,7 @@ around.
 | `ExchangeOnline-AntiPhishingMailboxIntelligence` | Automated | Mailbox intelligence + impersonation protection (requires Defender for Office 365 Plan 1/2). |
 | `ExchangeOnline-AntiMalwareAttachmentFilter` | Automated | The malware filter policy blocks common dangerous attachment types. |
 | `ExchangeOnline-DisableAutoForwarding` | Automated | Automatic forwarding of mail to external domains is blocked. |
-| `ExchangeOnline-DisableSmtpAuth` | Automated | Basic authentication for SMTP AUTH clients is disabled. |
+| [`ExchangeOnline-DisableSmtpAuth`](#automatable-false-controls) \* | Manual | Basic authentication for SMTP AUTH clients is disabled. |
 | [`ExchangeOnline-DkimSigning`](#running-each-mode) \* | Automated | DKIM signing is enabled for every accepted domain - needs `desiredValue.domains` populated first. |
 
 ### Teams (5)
@@ -506,7 +506,7 @@ etc.). Every validation failure names the specific control id and field.
 
 ## `Automatable: false` controls
 
-Five controls in this inventory have no safe or currently-documented
+Eight controls in this inventory have no safe or currently-documented
 automated remediation. They are always read and
 reported on in every Audit (so you can see their current value), but
 Apply/Restore never attempt to change them — instead they log
@@ -516,8 +516,11 @@ Apply/Restore never attempt to change them — instead they log
 |---|---|
 | `EntraID-GlobalAdminCount` | Entra admin center → Identity → Roles & administrators → Global Administrator (headcount judgment call; not something to automate) |
 | `EntraID-RestrictAdminPortalAccess` | Entra admin center → Identity → Users → User settings → "Restrict access to Microsoft Entra admin center" |
+| `EntraID-AuthMethodsHardening` | Entra admin center → Protection → Authentication methods → Policies → enable Microsoft Authenticator / disable SMS and Voice call, once confirmed no one still depends on them |
+| `EntraID-MfaRegistrationCampaign` | Entra admin center → Protection → Authentication methods → Registration campaign |
 | `EntraID-AdminPasswordResetNotification` | Entra admin center → Protection → Authentication methods → Password reset → Notifications tab → "Notify all admins when other admins reset their password?" |
 | `EntraID-GaNotLocalAdminOnJoin` | Entra admin center → Identity → Devices → Device settings → "Additional local administrators on Microsoft Entra joined devices" — Preview feature, no stable (v1.0) Graph/PowerShell API as of this writing |
+| `ExchangeOnline-DisableSmtpAuth` | Exchange admin center → Settings → Mail flow → disable SMTP AUTH, after confirming no device or app still depends on it |
 | `M365AdminCenter-SwayExternalSharing` | Microsoft 365 admin center → Settings → Org settings → Services → Sway → uncheck "Let people in your organization share their sways with people outside your organization" — no PowerShell/Graph API exists for this setting at all |
 
 `EntraID-RestrictAdminPortalAccess`, `EntraID-GaNotLocalAdminOnJoin`, and
@@ -563,14 +566,14 @@ their column instead. A scrollable wrapper around the table is still there as
 a safety net for a genuinely unbreakable value (a long token with no spaces),
 so only the table scrolls in that rare case, never the whole page.
 
-`EntraID-MfaRegistrationCampaign` **is** implemented as automatable, but
-Microsoft has changed the nested request-body shape for
-`Update-MgPolicyAuthenticationMethodPolicy` before. Validate the body
-parameter shape in this toolkit's `EntraIdControls.psm1` against the
-`Microsoft.Graph.Identity.SignIns` module version you have installed before
-relying on it in production — a schema drift here would surface as an
-`Update-*` cmdlet error (a `Failed` result in Apply's output), not a silent
-no-op, but it's worth checking ahead of time. Note that its
+`EntraID-MfaRegistrationCampaign` is deliberately **not** automatable: if
+the tenant has `enforceRegistrationAfterAllowedSnoozes` enabled (a separate,
+toolkit-untouched tenant property), this nudge can become a *blocking*
+sign-in requirement once a user exhausts their snoozes, not just a
+dismissible prompt — changing its state or target scope unattended risks
+locking real users out of sign-in. `Set-EntraID-MfaRegistrationCampaignState`
+always returns `Skipped-Manual`; Audit still reports drift so you know it
+needs a look, but Apply never touches it. Note that its
 `desiredValue.includeTargets` is required by the Graph API (the campaign has
 no effect with zero targets) — the seed config uses the documented
 `"all_users"` special group id to target everyone; replace it with a specific
@@ -588,6 +591,18 @@ multifactor authentication") — confirmed against a real tenant, that field
 is absent from the v1.0 `Get-MgPolicyAuthenticationMethodPolicy` response
 entirely and only exists on the beta Graph endpoint, which this toolkit
 does not call for anything it reports compliance on.
+
+`ExchangeOnline-DisableSmtpAuth` is deliberately **not** automatable:
+disabling SMTP AUTH tenant-wide doesn't affect normal mail flow
+(Outlook/OWA/mobile/MX/hybrid routing), but it does break basic-auth SMTP
+client submission still used by legacy scan-to-email devices, LOB apps, and
+cron/Database Mail senders — a well-documented real-world breakage pattern
+that needs a human who knows this tenant's mail flow, not an unattended
+script. `Set-ExchangeOnline-DisableSmtpAuthState` always returns
+`Skipped-Manual`; Audit still reports drift so you know it needs a look, but
+Apply never touches it. Note that Microsoft is also separately disabling
+SMTP AUTH by default tenant-wide on its own rollout schedule, independent of
+this toolkit.
 
 Two other real-tenant findings worth knowing about, both already fixed in
 this toolkit's code but worth being aware of if you're extending it further:

@@ -743,53 +743,38 @@ function Get-EntraID-MfaRegistrationCampaignState {
 function Set-EntraID-MfaRegistrationCampaignState {
     <#
     .SYNOPSIS
-        Idempotently sets the MFA registration campaign state and snooze duration.
+        Not automatable by design - always returns Skipped-Manual. The
+        registration campaign nudge can become a blocking sign-in requirement
+        (not just a dismissible prompt) once a user exhausts their snoozes, if
+        the tenant has enforceRegistrationAfterAllowedSnoozes enabled; changing
+        its state or target scope unattended can unexpectedly block sign-in for
+        real users. Change manually: Entra admin center > Protection >
+        Authentication methods > Registration campaign.
     .PARAMETER DesiredValue
-        Object: { state: 'enabled'|'disabled', snoozeDurationInDays: int,
-        includeTargets: [ { targetType, id, targetedAuthenticationMethod } ] }.
-        includeTargets is required by the Graph API - the campaign has no effect
-        without at least one target; the seed config uses the documented
-        "all_users" special group id to target the whole tenant.
+        Ignored.
     .PARAMETER CurrentValue
-        Optional pre-fetched current value.
+        Echoed back for the log/report.
     .EXAMPLE
-        Set-EntraID-MfaRegistrationCampaignState -DesiredValue ([pscustomobject]@{state='enabled';snoozeDurationInDays=1;includeTargets=@(@{targetType='group';id='all_users';targetedAuthenticationMethod='microsoftAuthenticator'})})
+        Set-EntraID-MfaRegistrationCampaignState -DesiredValue $null -CurrentValue $null
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory)]
+        [Parameter()]
+        [AllowNull()]
         [object]$DesiredValue,
 
         [Parameter()]
         [AllowNull()]
         [object]$CurrentValue
     )
-    $current = if ($null -ne $CurrentValue) { $CurrentValue } else { (Get-EntraID-MfaRegistrationCampaignState).Value }
-    if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
-        return [pscustomobject]@{ Id = 'EntraID-MfaRegistrationCampaign'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+    return [pscustomobject]@{
+        Id            = 'EntraID-MfaRegistrationCampaign'
+        Status        = 'Skipped-Manual'
+        PreviousValue = $CurrentValue
+        AppliedValue  = $null
+        Message       = 'Not automated: the registration campaign nudge can become a blocking sign-in requirement once snoozes are exhausted, so its state and target scope need a human decision, not an unattended script. Change manually: Entra admin center > Protection > Authentication methods > Registration campaign.'
     }
-    $includeTargets = @($DesiredValue.includeTargets | ForEach-Object {
-        @{
-            targetType                  = [string]$_.targetType
-            id                          = [string]$_.id
-            targetedAuthenticationMethod = [string]$_.targetedAuthenticationMethod
-        }
-    })
-    if ($includeTargets.Count -eq 0) {
-        throw "EntraID-MfaRegistrationCampaign requires at least one entry in desiredValue.includeTargets (the Graph API rejects an empty target list); update config/baseline.config.json before running Apply."
-    }
-    $body = @{
-        registrationEnforcement = @{
-            authenticationMethodsRegistrationCampaign = @{
-                state                = [string]$DesiredValue.state
-                snoozeDurationInDays = [int]$DesiredValue.snoozeDurationInDays
-                includeTargets       = $includeTargets
-            }
-        }
-    }
-    Update-MgPolicyAuthenticationMethodPolicy -BodyParameter $body -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'EntraID-MfaRegistrationCampaign'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated RegistrationEnforcement.AuthenticationMethodsRegistrationCampaign.' }
 }
 
 # ---------------------------------------------------------------------------

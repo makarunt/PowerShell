@@ -142,11 +142,19 @@ Describe 'ExchangeOnline-DkimSigning' {
 Describe 'ExchangeOnline-DisableSmtpAuth' {
 
     Context 'Set-ExchangeOnline-DisableSmtpAuthState' {
-        It 'disables SMTP AUTH when currently enabled' {
+        It 'never calls any mutating cmdlet and always returns Skipped-Manual' {
+            # Deliberately not automatable: disabling SMTP AUTH tenant-wide can
+            # break legacy scan-to-email devices, LOB apps, and cron/Database
+            # Mail senders that still use basic-auth SMTP submission - that call
+            # needs a human who knows this tenant's mail flow, not an
+            # unattended script.
             Mock -CommandName Set-TransportConfig -ModuleName ExchangeOnlineControls -MockWith { }
+
             $result = Set-ExchangeOnline-DisableSmtpAuthState -DesiredValue $true -CurrentValue $false
-            $result.Status | Should -Be 'Success'
-            Should -Invoke -CommandName Set-TransportConfig -ModuleName ExchangeOnlineControls -Times 1 -ParameterFilter { $SmtpClientAuthenticationDisabled -eq $true }
+
+            $result.Status | Should -Be 'Skipped-Manual'
+            $result.Message | Should -Match 'Exchange admin center'
+            Should -Invoke -CommandName Set-TransportConfig -ModuleName ExchangeOnlineControls -Times 0
         }
     }
 }

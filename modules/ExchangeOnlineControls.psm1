@@ -481,30 +481,38 @@ function Get-ExchangeOnline-DisableSmtpAuthState {
 function Set-ExchangeOnline-DisableSmtpAuthState {
     <#
     .SYNOPSIS
-        Idempotently disables/enables tenant-wide SMTP AUTH.
+        Not automatable by design - always returns Skipped-Manual. Disabling
+        SMTP AUTH tenant-wide breaks basic-auth SMTP client submission still
+        used by legacy scan-to-email devices, LOB apps, and cron/Database Mail
+        senders; that impact needs a human who knows this tenant's mail flow,
+        not an unattended script. Change manually: Exchange admin center >
+        Settings > Mail flow > disable SMTP AUTH, after confirming no device
+        or app still depends on it.
     .PARAMETER DesiredValue
-        Boolean: true to disable SMTP AUTH tenant-wide.
+        Ignored.
     .PARAMETER CurrentValue
-        Optional pre-fetched current value.
+        Echoed back for the log/report.
     .EXAMPLE
-        Set-ExchangeOnline-DisableSmtpAuthState -DesiredValue $true
+        Set-ExchangeOnline-DisableSmtpAuthState -DesiredValue $null -CurrentValue $null
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory)]
-        [bool]$DesiredValue,
+        [Parameter()]
+        [AllowNull()]
+        [object]$DesiredValue,
 
         [Parameter()]
         [AllowNull()]
         [object]$CurrentValue
     )
-    $current = if ($null -ne $CurrentValue) { [bool]$CurrentValue } else { (Get-ExchangeOnline-DisableSmtpAuthState).Value }
-    if ($current -eq $DesiredValue) {
-        return [pscustomobject]@{ Id = 'ExchangeOnline-DisableSmtpAuth'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+    return [pscustomobject]@{
+        Id            = 'ExchangeOnline-DisableSmtpAuth'
+        Status        = 'Skipped-Manual'
+        PreviousValue = $CurrentValue
+        AppliedValue  = $null
+        Message       = 'Not automated: disabling SMTP AUTH tenant-wide can break legacy scan-to-email devices, LOB apps, and cron/Database Mail senders that still use basic-auth SMTP submission. Change manually: Exchange admin center > Settings > Mail flow > disable SMTP AUTH, after confirming no device or app still depends on it.'
     }
-    Set-TransportConfig -SmtpClientAuthenticationDisabled:$DesiredValue -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'ExchangeOnline-DisableSmtpAuth'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated SmtpClientAuthenticationDisabled.' }
 }
 
 # ---------------------------------------------------------------------------

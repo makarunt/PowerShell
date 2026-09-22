@@ -155,6 +155,33 @@ Describe 'EntraID-AuthMethodsHardening (audit-only; not automatable by design)' 
     }
 }
 
+Describe 'EntraID-MfaRegistrationCampaign' {
+
+    Context 'Set-EntraID-MfaRegistrationCampaignState' {
+        It 'never calls any mutating Graph cmdlet and always returns Skipped-Manual' {
+            # Deliberately not automatable: if enforceRegistrationAfterAllowedSnoozes
+            # is enabled on the tenant, this nudge can become a blocking sign-in
+            # requirement once snoozes are exhausted - that call needs a human, not
+            # an unattended script. Same pattern as EntraID-AuthMethodsHardening above.
+            $desired = [pscustomobject]@{
+                state                = 'enabled'
+                snoozeDurationInDays = 1
+                includeTargets       = @(@{ targetType = 'group'; id = 'all_users'; targetedAuthenticationMethod = 'microsoftAuthenticator' })
+            }
+            $current = [pscustomobject]@{
+                state                = 'disabled'
+                snoozeDurationInDays = 3
+                includeTargets       = @()
+            }
+
+            $result = Set-EntraID-MfaRegistrationCampaignState -DesiredValue $desired -CurrentValue $current
+
+            $result.Status | Should -Be 'Skipped-Manual'
+            $result.Message | Should -Match 'Entra admin center'
+        }
+    }
+}
+
 Describe 'EntraID-AdminConsentWorkflow' {
 
     Context 'Get-EntraID-AdminConsentWorkflowState' {

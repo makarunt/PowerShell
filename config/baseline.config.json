@@ -97,7 +97,7 @@
       "id": "EntraID-MfaRegistrationCampaign",
       "workload": "EntraID",
       "enabled": true,
-      "automatable": true,
+      "automatable": false,
       "desiredValue": {
         "state": "enabled",
         "snoozeDurationInDays": 1,
@@ -105,7 +105,8 @@
           { "targetType": "group", "id": "all_users", "targetedAuthenticationMethod": "microsoftAuthenticator" }
         ]
       },
-      "description": "Users who have not registered strong MFA methods are nudged to do so at sign-in, with a short snooze window. Targets all users by default (Graph's documented 'all_users' special group id) - replace with a specific group id in includeTargets if you want to pilot with a subset first."
+      "description": "Users who have not registered strong MFA methods are nudged to do so at sign-in, with a short snooze window. Targets all users by default (Graph's documented 'all_users' special group id) - replace with a specific group id in includeTargets if you want to pilot with a subset first. Not automatable: if the tenant has enforceRegistrationAfterAllowedSnoozes enabled, this nudge can become a blocking sign-in requirement once snoozes run out, so its state and target scope need a human decision - review manually before changing.",
+      "manualInstructions": "Entra admin center > Protection > Authentication methods > Registration campaign."
     },
     {
       "id": "EntraID-AdminPasswordResetNotification",
@@ -185,9 +186,10 @@
       "id": "ExchangeOnline-DisableSmtpAuth",
       "workload": "ExchangeOnline",
       "enabled": true,
-      "automatable": true,
+      "automatable": false,
       "desiredValue": true,
-      "description": "Tenant-wide basic authentication for SMTP AUTH clients is disabled."
+      "description": "Tenant-wide basic authentication for SMTP AUTH clients is disabled. Not automatable: this can break legacy scan-to-email devices, LOB apps, and cron/Database Mail senders that still use basic-auth SMTP submission - review manually before changing.",
+      "manualInstructions": "Exchange admin center > Settings > Mail flow > disable SMTP AUTH, after confirming no device or app still depends on it."
     },
     {
       "id": "ExchangeOnline-DkimSigning",
