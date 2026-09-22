@@ -6,6 +6,98 @@ Exchange Online, Teams, OneDrive for Business, SharePoint Online, and the
 M365 Admin Center's org-wide settings. It is idempotent, safe to re-run, and
 always backs up current state before changing anything.
 
+## Control inventory
+
+46 controls across six workloads. This table is the full list at a glance;
+`*` marks a control covered in more depth further down this README (manual
+controls, ones that need tenant-specific config before Apply will run them,
+or ones with a Microsoft-side quirk worth knowing about) - follow the
+linked section for the detail, this table only gives the one-line summary.
+The authoritative source is always `config/baseline.config.json` itself;
+this table is generated from it and kept in sync by hand, not the other way
+around.
+
+### EntraID (13)
+
+| Id | Automatable | What it checks |
+|---|---|---|
+| `EntraID-UnifiedAuditLog` | Automated | Unified audit log ingestion is enabled tenant-wide. |
+| [`EntraID-GlobalAdminCount`](#automatable-false-controls) \* | Manual | Active Global Administrator count stays within a safe range. |
+| `EntraID-GuestInviteRestriction` | Automated | Only admins/guest-inviters can invite guest users. |
+| `EntraID-GuestUserRoleRestriction` | Automated | Guest users are placed in the Restricted Guest User role. |
+| `EntraID-BlockUserConsentToApps` | Automated | Non-admin users cannot consent to apps requesting org data. |
+| `EntraID-BlockSelfServiceAppCreation` | Automated | Regular users cannot register app registrations or create tenants. |
+| `EntraID-BlockSelfServiceSecurityGroupCreation` | Automated | Regular users cannot create security groups. |
+| [`EntraID-RestrictAdminPortalAccess`](#automatable-false-controls) \* | Manual | Admin portal access is restricted to admins only. |
+| [`EntraID-AuthMethodsHardening`](#automatable-false-controls) \* | Manual | Microsoft Authenticator enabled, SMS/Voice disabled tenant-wide. |
+| `EntraID-AdminConsentWorkflow` \* | Automated | Blocked app-consent requests route to admin reviewers - needs `desiredValue.reviewers` populated first. |
+| `EntraID-MfaRegistrationCampaign` | Automated | Users without strong MFA registered are nudged to register it at sign-in. |
+| [`EntraID-AdminPasswordResetNotification`](#automatable-false-controls) \* | Manual | Other admins are notified whenever an admin's password is reset. |
+| [`EntraID-GaNotLocalAdminOnJoin`](#automatable-false-controls) \* | Manual | Global Administrator doesn't implicitly become local admin on Entra-joined devices. |
+
+### ExchangeOnline (9)
+
+| Id | Automatable | What it checks |
+|---|---|---|
+| `ExchangeOnline-ExternalSenderTag` | Automated | Outlook tags messages from external senders. |
+| `ExchangeOnline-MailboxAuditingDefault` | Automated | Mailbox auditing is enabled by default for all mailboxes. |
+| `ExchangeOnline-AntiSpamInbound` | Automated | Inbound anti-spam quarantines high-confidence spam with a strict bulk threshold. |
+| `ExchangeOnline-AntiPhishingSpoofIntelligence` | Automated | Spoof intelligence enabled on the default anti-phishing policy (base EOP). |
+| `ExchangeOnline-AntiPhishingMailboxIntelligence` | Automated | Mailbox intelligence + impersonation protection (requires Defender for Office 365 Plan 1/2). |
+| `ExchangeOnline-AntiMalwareAttachmentFilter` | Automated | The malware filter policy blocks common dangerous attachment types. |
+| `ExchangeOnline-DisableAutoForwarding` | Automated | Automatic forwarding of mail to external domains is blocked. |
+| `ExchangeOnline-DisableSmtpAuth` | Automated | Basic authentication for SMTP AUTH clients is disabled. |
+| [`ExchangeOnline-DkimSigning`](#running-each-mode) \* | Automated | DKIM signing is enabled for every accepted domain - needs `desiredValue.domains` populated first. |
+
+### Teams (5)
+
+| Id | Automatable | What it checks |
+|---|---|---|
+| `Teams-BlockConsumerContact` | Automated | Blocks consumer Teams/Skype contact and trial-tenant federation. |
+| [`Teams-RestrictFederation`](#running-each-mode) \* | Automated | External Teams federation is restricted to an allow-list - needs `desiredValue.allowedDomains` populated first (or `-AcknowledgeFederationBlockAll`). |
+| `Teams-MeetingJoinDefaults` | Automated | Meeting lobby defaults keep anonymous users out and block PSTN lobby bypass. |
+| `Teams-AppPermissionPolicy` | Automated | Third-party Teams apps from the global catalog are blocked by default. |
+| `Teams-GuestAccessDefault` | Automated | Guest access to Teams is disabled tenant-wide by default. |
+
+### SharePointOnline (10)
+
+| Id | Automatable | What it checks |
+|---|---|---|
+| `SharePointOnline-SharingCapability` | Automated | External sharing is limited to existing guests (no anonymous links). |
+| `SharePointOnline-DefaultSharingLinkType` | Automated | The default sharing link type is "Specific people." |
+| `SharePointOnline-DefaultLinkPermission` | Automated | The default permission on a new sharing link is view-only. |
+| `SharePointOnline-AnonymousLinkExpiration` | Automated | Anonymous "Anyone" links automatically expire after 30 days. |
+| `SharePointOnline-GuestAccessExpiration` | Automated | Named external guest accounts lose access automatically after 30 days. |
+| `SharePointOnline-GuestReauthentication` | Automated | External guests re-verify identity via emailed one-time passcode every 15 days. |
+| [`SharePointOnline-AzureADB2BIntegration`](#azure-ad-b2b-integration-a-known-microsoft-side-deprecation) \* | Automated | External sharing is integrated with Entra ID (Azure AD) B2B invitations. |
+| [`SharePointOnline-PreventGuestResharing`](#report-statuses-skipped-manual-applied-pendingconfirmation-mechanismpossiblydeprecated) \* | Automated | External (guest) users cannot reshare files/folders they only have access to via sharing. |
+| `SharePointOnline-LegacyAuthProtocols` | Automated | Legacy (non-modern-auth) client protocols are blocked. |
+| `SharePointOnline-IdleSessionSignOut` | Automated | Idle browser sessions are warned, then signed out automatically. |
+
+### M365AdminCenter (1)
+
+| Id | Automatable | What it checks |
+|---|---|---|
+| [`M365AdminCenter-SwayExternalSharing`](#automatable-false-controls) \* | Manual | Sway external sharing is disabled tenant-wide. |
+
+### ConditionalAccess (8)
+
+Every `CA-*` control here is report-only — created with
+`state = "enabledForReportingButNotEnforced"`, never enabled/enforced by this
+toolkit. See [Conditional Access controls (report-only)](#conditional-access-controls-report-only)
+for licensing tiers, overlap detection, and the Security Defaults gate.
+
+| Id | Tier | What it checks |
+|---|---|---|
+| `CA-RequireMfaAllUsers` | 1 | Requires MFA for all users on all cloud apps. |
+| `CA-RequireMfaAdminRoles` | 1 | Requires MFA for the 14 privileged directory roles. |
+| `CA-BlockLegacyAuth` | 1 | Blocks legacy authentication for all users on all cloud apps. |
+| `CA-RequireMfaAzureManagement` | 1 | Requires MFA for the Microsoft Azure Management app. |
+| `CA-RequireMfaSecurityInfoRegistration` | 1 | Requires MFA when a user registers security info. |
+| `CA-RequireMfaGuestAccess` | 1 | Requires MFA for guest and external users of every type. |
+| `CA-RequireMfaSignInRisk` | 2 | Requires MFA for medium or high sign-in risk (Identity Protection). |
+| `CA-RequirePasswordChangeUserRisk` | 2 | Requires MFA and a password change for high user risk (Identity Protection). |
+
 ## Controls worth extra attention
 
 Some controls need tenant-specific configuration, have known Microsoft-side
