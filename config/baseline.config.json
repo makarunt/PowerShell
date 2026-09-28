@@ -41,14 +41,14 @@
       "workload": "EntraID",
       "enabled": true,
       "automatable": true,
-      "complianceMode": "ExcludesValues",
+      "complianceMode": "AllowsOnly",
       "desiredValue": {
         "permissionGrantPoliciesAssigned": [
-          "ManagePermissionGrantsForSelf.microsoft-user-default-low",
-          "ManagePermissionGrantsForSelf.microsoft-user-default-legacy"
+          "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat",
+          "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team"
         ]
       },
-      "description": "Non-admin users cannot consent to applications requesting access to organizational data. Matches CIS Microsoft 365 Foundations Benchmark 5.1.5.1 exactly: fails only if either banned policy id above is assigned; any other permission grant policy already assigned (e.g. Teams/chat resource-specific consent) is left alone and does not affect compliance or get removed on Apply."
+      "description": "Non-admin users cannot consent to applications requesting access to organizational data. Matches CIS Microsoft 365 Foundations Benchmark 5.1.5.1's intent as an allow-list: only the two Teams/chat resource-specific-consent (RSC) policy ids above may be assigned - any other permission grant policy (old ids like microsoft-user-default-low/legacy, or newer ones Microsoft introduces later, e.g. microsoft-user-default-allow-consent-apps/-recommended from the 'Let Microsoft manage your consent settings' preset) makes this non-compliant, whether or not this toolkit has seen that exact id before."
     },
     {
       "id": "EntraID-BlockSelfServiceAppCreation",

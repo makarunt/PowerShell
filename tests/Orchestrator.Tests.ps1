@@ -48,27 +48,31 @@ Describe 'Compliance diffing (Test-BaselineCompliance / Compare-BaselineValueDee
         Test-BaselineCompliance -CurrentValue 1 -DesiredValue @{ min = 2; max = 4 } -ComplianceMode Range | Should -Be $false
     }
 
-    Context 'ExcludesValues compliance mode' {
-        # Regression coverage for EntraID-BlockUserConsentToApps: CIS 5.1.5.1 only
-        # bans two specific policy ids, not the whole PermissionGrantPoliciesAssigned
-        # array - any other value already present (e.g. Teams/chat resource-specific
-        # consent) must not affect compliance.
-        It 'is compliant when none of the banned values are present, regardless of other entries' {
-            $current = [pscustomobject]@{ items = @('keep-me', 'also-keep') }
-            $desired = [pscustomobject]@{ items = @('banned-a', 'banned-b') }
-            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode ExcludesValues | Should -Be $true
+    Context 'AllowsOnly compliance mode' {
+        # Regression coverage for EntraID-BlockUserConsentToApps: a denylist of
+        # specific banned policy ids missed Microsoft's newer "Let Microsoft
+        # manage your consent settings" preset, which assigns different policy
+        # ids (microsoft-user-default-allow-consent-apps/-recommended) that
+        # were never on the denylist and so read as compliant. AllowsOnly is
+        # fail-closed instead: only allow-listed values (Teams/chat
+        # resource-specific consent) may be present - anything else, known or
+        # not, is non-compliant.
+        It 'is compliant when current contains only allow-listed values' {
+            $current = [pscustomobject]@{ items = @('allowed-a') }
+            $desired = [pscustomobject]@{ items = @('allowed-a', 'allowed-b') }
+            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode AllowsOnly | Should -Be $true
         }
 
-        It 'is non-compliant when any banned value is present' {
-            $current = [pscustomobject]@{ items = @('keep-me', 'banned-a') }
-            $desired = [pscustomobject]@{ items = @('banned-a', 'banned-b') }
-            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode ExcludesValues | Should -Be $false
+        It 'is non-compliant when current has a value the allow-list does not name, even an unanticipated one' {
+            $current = [pscustomobject]@{ items = @('allowed-a', 'brand-new-unanticipated-value') }
+            $desired = [pscustomobject]@{ items = @('allowed-a', 'allowed-b') }
+            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode AllowsOnly | Should -Be $false
         }
 
         It 'is compliant on an empty current array' {
             $current = [pscustomobject]@{ items = @() }
-            $desired = [pscustomobject]@{ items = @('banned-a', 'banned-b') }
-            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode ExcludesValues | Should -Be $true
+            $desired = [pscustomobject]@{ items = @('allowed-a', 'allowed-b') }
+            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode AllowsOnly | Should -Be $true
         }
     }
 

@@ -25,7 +25,7 @@ around.
 | [`EntraID-GlobalAdminCount`](#automatable-false-controls) \* | Manual | Active Global Administrator count stays within a safe range. |
 | `EntraID-GuestInviteRestriction` | Automated | Only admins/guest-inviters can invite guest users. |
 | `EntraID-GuestUserRoleRestriction` | Automated | Guest users are placed in the Restricted Guest User role. |
-| [`EntraID-BlockUserConsentToApps`](#entraid-blockuserconsenttoapps-matching-cis-5151-exactly) \* | Automated | Non-admin users cannot consent to apps requesting org data (CIS 5.1.5.1 - see note below). |
+| [`EntraID-BlockUserConsentToApps`](#entraid-blockuserconsenttoapps-an-allow-list-not-a-denylist) \* | Automated | Non-admin users cannot consent to apps requesting org data (CIS 5.1.5.1 - see note below). |
 | `EntraID-BlockSelfServiceAppCreation` | Automated | Regular users cannot register app registrations or create tenants. |
 | `EntraID-BlockSelfServiceSecurityGroupCreation` | Automated | Regular users cannot create security groups. |
 | [`EntraID-RestrictAdminPortalAccess`](#automatable-false-controls) \* | Manual | Admin portal access is restricted to admins only. |
@@ -106,7 +106,7 @@ quirks, or otherwise deserve a closer read before running Apply against them.
 | Control | Workload | Notes |
 |---|---|---|
 | `EntraID-AdminConsentWorkflow` | EntraID | Requires `desiredValue.reviewers` to be populated before Apply will run - see "`Automatable: false` controls" below for the pattern this follows. |
-| `EntraID-BlockUserConsentToApps` | EntraID | Checks only the two policy ids CIS 5.1.5.1 actually bans, not a fully-empty array - see "EntraID-BlockUserConsentToApps: matching CIS 5.1.5.1 exactly" below before assuming a non-empty `permissionGrantPoliciesAssigned` means non-compliant. |
+| `EntraID-BlockUserConsentToApps` | EntraID | Uses an allow-list (only Teams/chat resource-specific consent may be present), not CIS 5.1.5.1's literal two-id denylist - see "EntraID-BlockUserConsentToApps: an allow-list, not a denylist" below before assuming a non-empty `permissionGrantPoliciesAssigned` means non-compliant. |
 | `EntraID-GaNotLocalAdminOnJoin` | EntraID | Audit-only: Preview feature, no stable (v1.0) Graph/PowerShell API as of this writing. |
 | `M365AdminCenter-SwayExternalSharing` | M365AdminCenter | Audit-only: no PowerShell/Graph API exists for this setting at all. |
 | `SharePointOnline-AzureADB2BIntegration` | SharePointOnline | See "Azure AD B2B integration: a known Microsoft-side deprecation" below - read this before treating a post-apply mismatch as a bug. |
@@ -130,15 +130,16 @@ app-only-authentication work. The two controls are kept separate instead. See
 the comment on `Get-EntraID-BlockSelfServiceAppCreationState` in
 `EntraIdControls.psm1` for the full reasoning.
 
-### EntraID-BlockUserConsentToApps: matching CIS 5.1.5.1 exactly
+### EntraID-BlockUserConsentToApps: an allow-list, not a denylist
 
 This control checks the same Graph property CIS Microsoft 365 Foundations
 Benchmark 5.1.5.1's own audit procedure does -
 `(Get-MgPolicyAuthorizationPolicy).DefaultUserRolePermissions.PermissionGrantPoliciesAssigned`
-- but CIS's audit only fails if either
+- but CIS's literal audit text only fails if either
 `ManagePermissionGrantsForSelf.microsoft-user-default-low` or
 `ManagePermissionGrantsForSelf.microsoft-user-default-legacy` is present in
-that array. It does not require the array to be empty.
+that array. It does not require the array to be empty, and it predates
+policy ids Microsoft has since added.
 
 A real tenant can independently have
 `ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat`
@@ -152,13 +153,28 @@ version of this control required the whole array to be empty, which meant a
 tenant that was already fully CIS-compliant, with only RSC entries left
 over, was incorrectly reported as non-compliant.
 
-`desiredValue` now lists only the two CIS-banned policy ids, under
-`complianceMode: "ExcludesValues"` (see "How the config file works" above).
-Compliance is `true` whenever neither banned id is present, regardless of
-what else is assigned. `Set-EntraID-BlockUserConsentToAppsState` matches:
-on a non-compliant read it removes only the banned ids via a surgical PATCH,
-leaving every other assigned policy (including RSC entries) untouched -
-never a blanket overwrite to an empty array.
+The fix after that (checking only the two CIS-named policy ids) turned out
+to be its own trap: confirmed against a real tenant, turning on Microsoft's
+newer **"Let Microsoft manage your consent settings"** option (the
+recommended preset, allowing user consent for apps from verified publishers
+for selected permissions) assigns
+`ManagePermissionGrantsForSelf.microsoft-user-default-allow-consent-apps`
+and `microsoft-user-default-recommended` - two policy ids CIS's text never
+names, because they didn't exist when that text was written. A denylist of
+specific banned ids read that tenant as compliant, even though user consent
+was clearly turned on.
+
+`desiredValue` now lists the two RSC entries as an **allow-list**, under
+`complianceMode: "AllowsOnly"` (see "How the config file works" above).
+Compliant means the array contains *only* allow-listed values; anything
+else present - the old `low`/`legacy` ids, the newer
+`allow-consent-apps`/`recommended` ids, or any future id Microsoft
+introduces - makes it non-compliant, whether or not this toolkit has ever
+seen that exact value before. `Set-EntraID-BlockUserConsentToAppsState`
+matches: on a non-compliant read it strips everything not on the allow-list
+via a surgical PATCH, leaving RSC entries untouched - never a blanket
+overwrite to an empty array, and never limited to a fixed list of ids this
+toolkit already knew about.
 
 ### The M365 Admin Center workload
 
@@ -524,14 +540,16 @@ Three optional fields change how a control is evaluated, not what it does:
 - `complianceMode: "Range"` — for controls like `EntraID-GlobalAdminCount`,
   where `desiredValue` is `{ "min": ..., "max": ... }` and the live value is
   a number that must fall inside that range, instead of matching exactly.
-- `complianceMode: "ExcludesValues"` — for a control that must only forbid
+- `complianceMode: "AllowsOnly"` — for a control that must only *permit*
   specific values rather than pin a whole collection to an exact shape.
-  `desiredValue`'s properties are each treated as a per-property array of
-  *banned* values: compliant means none of them appear in the live value's
-  same-named array, and every other entry already present is ignored (not
-  compared, not removed on Apply). `EntraID-BlockUserConsentToApps` uses this
-  to match CIS Microsoft 365 Foundations Benchmark 5.1.5.1 exactly — see the
-  note below.
+  `desiredValue`'s properties are each treated as a per-property allow-list:
+  compliant means every value already present in the live value's
+  same-named array is on that list. Any value present that isn't allowed —
+  known or not — makes it non-compliant. Prefer this over a denylist
+  whenever the vendor can add new values to the collection over time that
+  should also count as non-compliant; a denylist only catches the specific
+  values it was written against. `EntraID-BlockUserConsentToApps` uses this
+  — see the note below.
 - `requiresPopulatedFields: ["domains"]` — names a property under
   `desiredValue` that Apply refuses to run with an empty value (see the
   DKIM/federation note above).
@@ -541,12 +559,12 @@ The config is validated against `config/baseline.config.schema.json` with
 (`Test-BaselineConfigSemantics` in `BaselineCore.psm1`) for checks JSON
 Schema alone can't express clearly (duplicate ids, an `automatable: false`
 control missing `manualInstructions`, a `Range` control without `min`/`max`,
-an `ExcludesValues` control whose `desiredValue` properties aren't arrays,
+an `AllowsOnly` control whose `desiredValue` properties aren't arrays,
 etc.). Every validation failure names the specific control id and field.
 
-`EntraID-BlockUserConsentToApps` is this toolkit's one `ExcludesValues`
-control today — see "EntraID-BlockUserConsentToApps: matching CIS 5.1.5.1
-exactly" under "Controls worth extra attention" above for why.
+`EntraID-BlockUserConsentToApps` is this toolkit's one `AllowsOnly` control
+today — see "EntraID-BlockUserConsentToApps: an allow-list, not a denylist"
+under "Controls worth extra attention" above for why.
 
 ## `Automatable: false` controls
 

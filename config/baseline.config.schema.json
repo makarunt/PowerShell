@@ -52,8 +52,8 @@
           },
           "complianceMode": {
             "type": "string",
-            "description": "How to compare current vs. desired value. Equality (default) does a deep structural comparison. Range treats desiredValue as {min,max} and currentValue as a number. ExcludesValues treats desiredValue's properties as per-property arrays of banned values - compliant means none of them appear in currentValue's same-named array; any other value already present in currentValue is ignored.",
-            "enum": ["Equality", "Range", "ExcludesValues"]
+            "description": "How to compare current vs. desired value. Equality (default) does a deep structural comparison. Range treats desiredValue as {min,max} and currentValue as a number. AllowsOnly treats desiredValue's properties as per-property allow-lists - compliant means every value already present in currentValue's same-named array is on that allow-list; any value present that ISN'T allowed (known or not) makes it non-compliant.",
+            "enum": ["Equality", "Range", "AllowsOnly"]
           },
           "manualInstructions": {
             "type": "string",

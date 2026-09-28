@@ -259,15 +259,15 @@ function Test-BaselineConfigSemantics {
                 $errors.Add("Control '$id': desiredValue.min ($($desired.min)) is greater than desiredValue.max ($($desired.max)).")
             }
         }
-        elseif ($complianceMode -eq 'ExcludesValues') {
+        elseif ($complianceMode -eq 'AllowsOnly') {
             $desired = $control.desiredValue
             if (-not $desired -or @($desired.PSObject.Properties).Count -eq 0) {
-                $errors.Add("Control '$id': complianceMode is 'ExcludesValues' but desiredValue has no properties to list banned values under.")
+                $errors.Add("Control '$id': complianceMode is 'AllowsOnly' but desiredValue has no properties to list allowed values under.")
             }
             else {
                 foreach ($p in $desired.PSObject.Properties) {
                     if ($p.Value -isnot [System.Collections.IEnumerable] -or $p.Value -is [string]) {
-                        $errors.Add("Control '$id': complianceMode is 'ExcludesValues' but desiredValue.$($p.Name) is not an array of banned values.")
+                        $errors.Add("Control '$id': complianceMode is 'AllowsOnly' but desiredValue.$($p.Name) is not an array of allowed values.")
                     }
                 }
             }
@@ -619,7 +619,7 @@ function Test-BaselineApplyOutcome {
         [object]$DesiredValue,
 
         [Parameter()]
-        [ValidateSet('Equality', 'Range', 'ExcludesValues')]
+        [ValidateSet('Equality', 'Range', 'AllowsOnly')]
         [string]$ComplianceMode = 'Equality',
 
         [Parameter()]
@@ -685,16 +685,21 @@ function Test-BaselineCompliance {
     .PARAMETER ComplianceMode
         'Equality' (default) does a deep structural comparison. 'Range' expects
         DesiredValue to be a {min,max} object and CurrentValue to be numeric.
-        'ExcludesValues' expects DesiredValue and CurrentValue to be parallel
-        objects whose properties are arrays; compliant means none of
-        DesiredValue's per-property array entries appear in CurrentValue's
-        same-named array - every other entry already present in CurrentValue
-        is ignored. Use this when a control must only forbid specific values
-        rather than pin the whole collection to an exact desired shape.
+        'AllowsOnly' expects DesiredValue and CurrentValue to be parallel
+        objects whose properties are arrays; DesiredValue's per-property array
+        is the allow-list. Compliant means every entry already present in
+        CurrentValue's same-named array also appears in that allow-list - any
+        entry present in CurrentValue that ISN'T on the allow-list makes it
+        non-compliant, whether or not that exact value was anticipated ahead
+        of time. Use this (instead of a denylist) whenever the vendor can add
+        new values to the collection that should also count as
+        non-compliant - a denylist would silently treat any value it didn't
+        already know about as fine, which is the wrong default for a security
+        control.
     .EXAMPLE
         Test-BaselineCompliance -CurrentValue 3 -DesiredValue @{min=2;max=4} -ComplianceMode Range
     .EXAMPLE
-        Test-BaselineCompliance -CurrentValue @{items=@('a','b')} -DesiredValue @{items=@('a')} -ComplianceMode ExcludesValues
+        Test-BaselineCompliance -CurrentValue @{items=@('a')} -DesiredValue @{items=@('a','b')} -ComplianceMode AllowsOnly
     #>
     [CmdletBinding()]
     [OutputType([Nullable[bool]])]
@@ -708,7 +713,7 @@ function Test-BaselineCompliance {
         [object]$DesiredValue,
 
         [Parameter()]
-        [ValidateSet('Equality', 'Range', 'ExcludesValues')]
+        [ValidateSet('Equality', 'Range', 'AllowsOnly')]
         [string]$ComplianceMode = 'Equality'
     )
 
@@ -719,14 +724,14 @@ function Test-BaselineCompliance {
         return ([double]$CurrentValue -ge [double]$props['min']) -and ([double]$CurrentValue -le [double]$props['max'])
     }
 
-    if ($ComplianceMode -eq 'ExcludesValues') {
+    if ($ComplianceMode -eq 'AllowsOnly') {
         $desiredMap = Get-BaselinePropertyMap -Value $DesiredValue
         $currentMap = Get-BaselinePropertyMap -Value $CurrentValue
         foreach ($key in $desiredMap.Keys) {
-            $banned = @($desiredMap[$key])
+            $allowed = @($desiredMap[$key])
             $actual = @($currentMap[$key])
-            foreach ($value in $banned) {
-                if ($actual -contains $value) { return $false }
+            foreach ($value in $actual) {
+                if ($allowed -notcontains $value) { return $false }
             }
         }
         return $true

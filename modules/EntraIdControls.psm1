@@ -254,32 +254,39 @@ function Get-EntraID-BlockUserConsentToAppsState {
 function Set-EntraID-BlockUserConsentToAppsState {
     <#
     .SYNOPSIS
-        Idempotently removes only the CIS 5.1.5.1-banned default user-consent
-        policies from the permission grant policies assigned for user app
-        consent, leaving any other assigned policy untouched.
+        Idempotently strips every permission grant policy that isn't on the
+        allow-list from the permission grant policies assigned for user app
+        consent, leaving any allow-listed policy untouched.
     .DESCRIPTION
-        Matches CIS Microsoft 365 Foundations Benchmark 5.1.5.1 exactly: that
-        control only fails an audit when either
-        ManagePermissionGrantsForSelf.microsoft-user-default-low or
-        ManagePermissionGrantsForSelf.microsoft-user-default-legacy is present
-        in DefaultUserRolePermissions.PermissionGrantPoliciesAssigned - it does
-        not require the array to be empty. A real tenant can also have
-        ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-
-        permissions-for-chat/-for-team assigned (Teams/chat resource-specific
-        consent), which is a separate mechanism CIS 5.1.5.1 does not check and
-        this control must not touch. So on a non-compliant read, only the
-        banned entries are removed via a surgical PATCH that preserves
-        everything else already in the array - never a blanket overwrite to []
-        the way most other controls in this toolkit converge to their desired
-        value.
+        Matches CIS Microsoft 365 Foundations Benchmark 5.1.5.1's intent as an
+        allow-list rather than a denylist against
+        DefaultUserRolePermissions.PermissionGrantPoliciesAssigned. A real
+        tenant can have ManagePermissionGrantsForOwnedResource.microsoft-
+        dynamically-managed-permissions-for-chat/-for-team assigned (Teams/
+        chat resource-specific consent), a separate mechanism CIS 5.1.5.1
+        doesn't check and this control must not touch. Anything else present -
+        whether it's an older policy id like
+        ManagePermissionGrantsForSelf.microsoft-user-default-low/legacy, or a
+        newer one Microsoft introduces later (confirmed against a real tenant:
+        turning on "Let Microsoft manage your consent settings" assigns
+        microsoft-user-default-allow-consent-apps and
+        microsoft-user-default-recommended, neither of which CIS's own text
+        names) - means user consent is enabled in some form and must be
+        cleared. A fixed denylist of specific banned ids can't keep up with
+        Microsoft adding new consent-policy ids over time; an allow-list of
+        the few known-benign ids is safe by default against that. On a
+        non-compliant read, only the entries NOT on the allow-list are
+        stripped via a surgical PATCH that preserves every allow-listed entry
+        already present - never a blanket overwrite to [] the way most other
+        controls in this toolkit converge to their desired value.
     .PARAMETER DesiredValue
-        Object: { permissionGrantPoliciesAssigned: [ <banned policy ids> ] } -
-        under complianceMode ExcludesValues this is the list of values that
-        must NOT be present, not the full desired array state.
+        Object: { permissionGrantPoliciesAssigned: [ <allowed policy ids> ] } -
+        under complianceMode AllowsOnly this is the list of the only values
+        that may be present, not the full desired array state.
     .PARAMETER CurrentValue
         Optional pre-fetched current value.
     .EXAMPLE
-        Set-EntraID-BlockUserConsentToAppsState -DesiredValue ([pscustomobject]@{permissionGrantPoliciesAssigned=@('ManagePermissionGrantsForSelf.microsoft-user-default-low','ManagePermissionGrantsForSelf.microsoft-user-default-legacy')})
+        Set-EntraID-BlockUserConsentToAppsState -DesiredValue ([pscustomobject]@{permissionGrantPoliciesAssigned=@('ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat','ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team')})
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -292,15 +299,15 @@ function Set-EntraID-BlockUserConsentToAppsState {
         [object]$CurrentValue
     )
     $current = if ($null -ne $CurrentValue) { $CurrentValue } else { (Get-EntraID-BlockUserConsentToAppsState).Value }
-    if (Test-BaselineCompliance -CurrentValue $current -DesiredValue $DesiredValue -ComplianceMode 'ExcludesValues') {
+    if (Test-BaselineCompliance -CurrentValue $current -DesiredValue $DesiredValue -ComplianceMode 'AllowsOnly') {
         return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    $banned = @($DesiredValue.permissionGrantPoliciesAssigned)
-    $remaining = @($current.permissionGrantPoliciesAssigned | Where-Object { $banned -notcontains $_ })
+    $allowed = @($DesiredValue.permissionGrantPoliciesAssigned)
+    $remaining = @($current.permissionGrantPoliciesAssigned | Where-Object { $allowed -contains $_ })
     $body = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = $remaining } }
     Update-MgPolicyAuthorizationPolicy -BodyParameter $body -ErrorAction Stop
     $applied = [pscustomobject]@{ permissionGrantPoliciesAssigned = $remaining }
-    return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $applied; Message = 'Removed the CIS-banned default user-consent policies from PermissionGrantPoliciesAssigned; any other assigned policy (e.g. Teams/chat resource-specific consent) was left untouched.' }
+    return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $applied; Message = 'Removed every permission grant policy not on the allow-list from PermissionGrantPoliciesAssigned; any allow-listed policy (e.g. Teams/chat resource-specific consent) was left untouched.' }
 }
 
 # ---------------------------------------------------------------------------
