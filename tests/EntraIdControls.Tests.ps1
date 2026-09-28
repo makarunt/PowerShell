@@ -255,6 +255,59 @@ Describe 'EntraID-GaNotLocalAdminOnJoin (audit-only)' {
     }
 }
 
+Describe 'EntraID-BlockUserConsentToApps (CIS 5.1.5.1: bans two specific policy ids, not the whole array)' {
+
+    Context 'Set-EntraID-BlockUserConsentToAppsState' {
+        It 'is a no-op when neither banned policy id is present, even with other policies assigned' {
+            # A real tenant can have Teams/chat resource-specific consent (RSC)
+            # policies assigned independently of the general user-consent
+            # setting; CIS 5.1.5.1 doesn't check those, so this control must not
+            # either.
+            Mock -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -MockWith { }
+            $current = [pscustomobject]@{ permissionGrantPoliciesAssigned = @(
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat',
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team'
+            ) }
+            $desired = [pscustomobject]@{ permissionGrantPoliciesAssigned = @(
+                'ManagePermissionGrantsForSelf.microsoft-user-default-low',
+                'ManagePermissionGrantsForSelf.microsoft-user-default-legacy'
+            ) }
+
+            $result = Set-EntraID-BlockUserConsentToAppsState -DesiredValue $desired -CurrentValue $current
+
+            $result.Status | Should -Be 'Success'
+            $result.Message | Should -Match 'Already compliant'
+            Should -Invoke -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -Times 0
+        }
+
+        It 'removes only the banned policy ids, preserving every other assigned policy' {
+            Mock -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -MockWith { }
+            $current = [pscustomobject]@{ permissionGrantPoliciesAssigned = @(
+                'ManagePermissionGrantsForSelf.microsoft-user-default-legacy',
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat',
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team'
+            ) }
+            $desired = [pscustomobject]@{ permissionGrantPoliciesAssigned = @(
+                'ManagePermissionGrantsForSelf.microsoft-user-default-low',
+                'ManagePermissionGrantsForSelf.microsoft-user-default-legacy'
+            ) }
+
+            $result = Set-EntraID-BlockUserConsentToAppsState -DesiredValue $desired -CurrentValue $current
+
+            $result.Status | Should -Be 'Success'
+            $result.AppliedValue.permissionGrantPoliciesAssigned | Should -Not -Contain 'ManagePermissionGrantsForSelf.microsoft-user-default-legacy'
+            $result.AppliedValue.permissionGrantPoliciesAssigned | Should -Contain 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat'
+            $result.AppliedValue.permissionGrantPoliciesAssigned | Should -Contain 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team'
+            Should -Invoke -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -Times 1 -ParameterFilter {
+                $sent = @($BodyParameter.defaultUserRolePermissions.permissionGrantPoliciesAssigned)
+                ($sent -notcontains 'ManagePermissionGrantsForSelf.microsoft-user-default-legacy') -and
+                ($sent -contains 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat') -and
+                ($sent -contains 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team')
+            }
+        }
+    }
+}
+
 Describe 'EntraID-BlockSelfServiceAppCreation / EntraID-BlockSelfServiceSecurityGroupCreation overlap (v2 deviation)' {
 
     It 'BlockSelfServiceAppCreation does NOT gain an allowedToCreateSecurityGroups field (kept as a separate control)' {

@@ -259,6 +259,19 @@ function Test-BaselineConfigSemantics {
                 $errors.Add("Control '$id': desiredValue.min ($($desired.min)) is greater than desiredValue.max ($($desired.max)).")
             }
         }
+        elseif ($complianceMode -eq 'ExcludesValues') {
+            $desired = $control.desiredValue
+            if (-not $desired -or @($desired.PSObject.Properties).Count -eq 0) {
+                $errors.Add("Control '$id': complianceMode is 'ExcludesValues' but desiredValue has no properties to list banned values under.")
+            }
+            else {
+                foreach ($p in $desired.PSObject.Properties) {
+                    if ($p.Value -isnot [System.Collections.IEnumerable] -or $p.Value -is [string]) {
+                        $errors.Add("Control '$id': complianceMode is 'ExcludesValues' but desiredValue.$($p.Name) is not an array of banned values.")
+                    }
+                }
+            }
+        }
 
         if ($control.PSObject.Properties['requiresPopulatedFields']) {
             foreach ($field in $control.requiresPopulatedFields) {
@@ -606,7 +619,7 @@ function Test-BaselineApplyOutcome {
         [object]$DesiredValue,
 
         [Parameter()]
-        [ValidateSet('Equality', 'Range')]
+        [ValidateSet('Equality', 'Range', 'ExcludesValues')]
         [string]$ComplianceMode = 'Equality',
 
         [Parameter()]
@@ -672,8 +685,16 @@ function Test-BaselineCompliance {
     .PARAMETER ComplianceMode
         'Equality' (default) does a deep structural comparison. 'Range' expects
         DesiredValue to be a {min,max} object and CurrentValue to be numeric.
+        'ExcludesValues' expects DesiredValue and CurrentValue to be parallel
+        objects whose properties are arrays; compliant means none of
+        DesiredValue's per-property array entries appear in CurrentValue's
+        same-named array - every other entry already present in CurrentValue
+        is ignored. Use this when a control must only forbid specific values
+        rather than pin the whole collection to an exact desired shape.
     .EXAMPLE
         Test-BaselineCompliance -CurrentValue 3 -DesiredValue @{min=2;max=4} -ComplianceMode Range
+    .EXAMPLE
+        Test-BaselineCompliance -CurrentValue @{items=@('a','b')} -DesiredValue @{items=@('a')} -ComplianceMode ExcludesValues
     #>
     [CmdletBinding()]
     [OutputType([Nullable[bool]])]
@@ -687,7 +708,7 @@ function Test-BaselineCompliance {
         [object]$DesiredValue,
 
         [Parameter()]
-        [ValidateSet('Equality', 'Range')]
+        [ValidateSet('Equality', 'Range', 'ExcludesValues')]
         [string]$ComplianceMode = 'Equality'
     )
 
@@ -696,6 +717,19 @@ function Test-BaselineCompliance {
     if ($ComplianceMode -eq 'Range') {
         $props = Get-BaselinePropertyMap -Value $DesiredValue
         return ([double]$CurrentValue -ge [double]$props['min']) -and ([double]$CurrentValue -le [double]$props['max'])
+    }
+
+    if ($ComplianceMode -eq 'ExcludesValues') {
+        $desiredMap = Get-BaselinePropertyMap -Value $DesiredValue
+        $currentMap = Get-BaselinePropertyMap -Value $CurrentValue
+        foreach ($key in $desiredMap.Keys) {
+            $banned = @($desiredMap[$key])
+            $actual = @($currentMap[$key])
+            foreach ($value in $banned) {
+                if ($actual -contains $value) { return $false }
+            }
+        }
+        return $true
     }
 
     return Compare-BaselineValueDeep -Left $CurrentValue -Right $DesiredValue

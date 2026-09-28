@@ -254,13 +254,32 @@ function Get-EntraID-BlockUserConsentToAppsState {
 function Set-EntraID-BlockUserConsentToAppsState {
     <#
     .SYNOPSIS
-        Idempotently sets the permission grant policies assigned for user app consent.
+        Idempotently removes only the CIS 5.1.5.1-banned default user-consent
+        policies from the permission grant policies assigned for user app
+        consent, leaving any other assigned policy untouched.
+    .DESCRIPTION
+        Matches CIS Microsoft 365 Foundations Benchmark 5.1.5.1 exactly: that
+        control only fails an audit when either
+        ManagePermissionGrantsForSelf.microsoft-user-default-low or
+        ManagePermissionGrantsForSelf.microsoft-user-default-legacy is present
+        in DefaultUserRolePermissions.PermissionGrantPoliciesAssigned - it does
+        not require the array to be empty. A real tenant can also have
+        ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-
+        permissions-for-chat/-for-team assigned (Teams/chat resource-specific
+        consent), which is a separate mechanism CIS 5.1.5.1 does not check and
+        this control must not touch. So on a non-compliant read, only the
+        banned entries are removed via a surgical PATCH that preserves
+        everything else already in the array - never a blanket overwrite to []
+        the way most other controls in this toolkit converge to their desired
+        value.
     .PARAMETER DesiredValue
-        Object: { permissionGrantPoliciesAssigned: [] }.
+        Object: { permissionGrantPoliciesAssigned: [ <banned policy ids> ] } -
+        under complianceMode ExcludesValues this is the list of values that
+        must NOT be present, not the full desired array state.
     .PARAMETER CurrentValue
         Optional pre-fetched current value.
     .EXAMPLE
-        Set-EntraID-BlockUserConsentToAppsState -DesiredValue ([pscustomobject]@{permissionGrantPoliciesAssigned=@()})
+        Set-EntraID-BlockUserConsentToAppsState -DesiredValue ([pscustomobject]@{permissionGrantPoliciesAssigned=@('ManagePermissionGrantsForSelf.microsoft-user-default-low','ManagePermissionGrantsForSelf.microsoft-user-default-legacy')})
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -273,12 +292,15 @@ function Set-EntraID-BlockUserConsentToAppsState {
         [object]$CurrentValue
     )
     $current = if ($null -ne $CurrentValue) { $CurrentValue } else { (Get-EntraID-BlockUserConsentToAppsState).Value }
-    if (Compare-BaselineValueDeep -Left $current -Right $DesiredValue) {
+    if (Test-BaselineCompliance -CurrentValue $current -DesiredValue $DesiredValue -ComplianceMode 'ExcludesValues') {
         return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    $body = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @($DesiredValue.permissionGrantPoliciesAssigned) } }
+    $banned = @($DesiredValue.permissionGrantPoliciesAssigned)
+    $remaining = @($current.permissionGrantPoliciesAssigned | Where-Object { $banned -notcontains $_ })
+    $body = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = $remaining } }
     Update-MgPolicyAuthorizationPolicy -BodyParameter $body -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated DefaultUserRolePermissions.PermissionGrantPoliciesAssigned.' }
+    $applied = [pscustomobject]@{ permissionGrantPoliciesAssigned = $remaining }
+    return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $applied; Message = 'Removed the CIS-banned default user-consent policies from PermissionGrantPoliciesAssigned; any other assigned policy (e.g. Teams/chat resource-specific consent) was left untouched.' }
 }
 
 # ---------------------------------------------------------------------------

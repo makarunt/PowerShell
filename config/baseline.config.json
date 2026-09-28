@@ -41,8 +41,14 @@
       "workload": "EntraID",
       "enabled": true,
       "automatable": true,
-      "desiredValue": { "permissionGrantPoliciesAssigned": [] },
-      "description": "Non-admin users cannot consent to applications requesting access to organizational data."
+      "complianceMode": "ExcludesValues",
+      "desiredValue": {
+        "permissionGrantPoliciesAssigned": [
+          "ManagePermissionGrantsForSelf.microsoft-user-default-low",
+          "ManagePermissionGrantsForSelf.microsoft-user-default-legacy"
+        ]
+      },
+      "description": "Non-admin users cannot consent to applications requesting access to organizational data. Matches CIS Microsoft 365 Foundations Benchmark 5.1.5.1 exactly: fails only if either banned policy id above is assigned; any other permission grant policy already assigned (e.g. Teams/chat resource-specific consent) is left alone and does not affect compliance or get removed on Apply."
     },
     {
       "id": "EntraID-BlockSelfServiceAppCreation",

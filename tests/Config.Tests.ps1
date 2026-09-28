@@ -208,4 +208,56 @@ Describe 'Baseline config validation' {
             }
         }
     }
+
+    Context 'ExcludesValues compliance mode validation' {
+        It 'fails when complianceMode is ExcludesValues but desiredValue has no properties' {
+            $config = [pscustomobject]@{
+                schemaVersion = '1.0'
+                baselineSource = 'test'
+                controls = @(
+                    [pscustomobject]@{
+                        id = 'Test-ExcludesValues'
+                        workload = 'EntraID'
+                        enabled = $true
+                        automatable = $true
+                        desiredValue = [pscustomobject]@{}
+                        description = 'Bad excludesValues control.'
+                        complianceMode = 'ExcludesValues'
+                    }
+                )
+            }
+            $badPath = New-TempConfigFile -ConfigObject $config
+            try {
+                { Import-BaselineConfig -Path $badPath -SchemaPath $script:SchemaPath } | Should -Throw '*ExcludesValues*'
+            }
+            finally {
+                Remove-Item $badPath -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'fails when a desiredValue property under ExcludesValues is not an array' {
+            $config = [pscustomobject]@{
+                schemaVersion = '1.0'
+                baselineSource = 'test'
+                controls = @(
+                    [pscustomobject]@{
+                        id = 'Test-ExcludesValues-NonArray'
+                        workload = 'EntraID'
+                        enabled = $true
+                        automatable = $true
+                        desiredValue = [pscustomobject]@{ items = 'not-an-array' }
+                        description = 'Bad excludesValues control.'
+                        complianceMode = 'ExcludesValues'
+                    }
+                )
+            }
+            $badPath = New-TempConfigFile -ConfigObject $config
+            try {
+                { Import-BaselineConfig -Path $badPath -SchemaPath $script:SchemaPath } | Should -Throw '*ExcludesValues*'
+            }
+            finally {
+                Remove-Item $badPath -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }

@@ -48,6 +48,30 @@ Describe 'Compliance diffing (Test-BaselineCompliance / Compare-BaselineValueDee
         Test-BaselineCompliance -CurrentValue 1 -DesiredValue @{ min = 2; max = 4 } -ComplianceMode Range | Should -Be $false
     }
 
+    Context 'ExcludesValues compliance mode' {
+        # Regression coverage for EntraID-BlockUserConsentToApps: CIS 5.1.5.1 only
+        # bans two specific policy ids, not the whole PermissionGrantPoliciesAssigned
+        # array - any other value already present (e.g. Teams/chat resource-specific
+        # consent) must not affect compliance.
+        It 'is compliant when none of the banned values are present, regardless of other entries' {
+            $current = [pscustomobject]@{ items = @('keep-me', 'also-keep') }
+            $desired = [pscustomobject]@{ items = @('banned-a', 'banned-b') }
+            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode ExcludesValues | Should -Be $true
+        }
+
+        It 'is non-compliant when any banned value is present' {
+            $current = [pscustomobject]@{ items = @('keep-me', 'banned-a') }
+            $desired = [pscustomobject]@{ items = @('banned-a', 'banned-b') }
+            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode ExcludesValues | Should -Be $false
+        }
+
+        It 'is compliant on an empty current array' {
+            $current = [pscustomobject]@{ items = @() }
+            $desired = [pscustomobject]@{ items = @('banned-a', 'banned-b') }
+            Test-BaselineCompliance -CurrentValue $current -DesiredValue $desired -ComplianceMode ExcludesValues | Should -Be $true
+        }
+    }
+
     Context 'Hashtable values (not just PSCustomObject) - regression test for a real infinite-recursion bug' {
         # A Hashtable is ALSO [System.Collections.IEnumerable] in .NET, same as an array.
         # Comparing two hashtables used to recurse forever: @($hashtable) just wraps the

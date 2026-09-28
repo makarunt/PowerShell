@@ -25,7 +25,7 @@ around.
 | [`EntraID-GlobalAdminCount`](#automatable-false-controls) \* | Manual | Active Global Administrator count stays within a safe range. |
 | `EntraID-GuestInviteRestriction` | Automated | Only admins/guest-inviters can invite guest users. |
 | `EntraID-GuestUserRoleRestriction` | Automated | Guest users are placed in the Restricted Guest User role. |
-| `EntraID-BlockUserConsentToApps` | Automated | Non-admin users cannot consent to apps requesting org data. |
+| [`EntraID-BlockUserConsentToApps`](#entraid-blockuserconsenttoapps-matching-cis-5151-exactly) \* | Automated | Non-admin users cannot consent to apps requesting org data (CIS 5.1.5.1 - see note below). |
 | `EntraID-BlockSelfServiceAppCreation` | Automated | Regular users cannot register app registrations or create tenants. |
 | `EntraID-BlockSelfServiceSecurityGroupCreation` | Automated | Regular users cannot create security groups. |
 | [`EntraID-RestrictAdminPortalAccess`](#automatable-false-controls) \* | Manual | Admin portal access is restricted to admins only. |
@@ -106,6 +106,7 @@ quirks, or otherwise deserve a closer read before running Apply against them.
 | Control | Workload | Notes |
 |---|---|---|
 | `EntraID-AdminConsentWorkflow` | EntraID | Requires `desiredValue.reviewers` to be populated before Apply will run - see "`Automatable: false` controls" below for the pattern this follows. |
+| `EntraID-BlockUserConsentToApps` | EntraID | Checks only the two policy ids CIS 5.1.5.1 actually bans, not a fully-empty array - see "EntraID-BlockUserConsentToApps: matching CIS 5.1.5.1 exactly" below before assuming a non-empty `permissionGrantPoliciesAssigned` means non-compliant. |
 | `EntraID-GaNotLocalAdminOnJoin` | EntraID | Audit-only: Preview feature, no stable (v1.0) Graph/PowerShell API as of this writing. |
 | `M365AdminCenter-SwayExternalSharing` | M365AdminCenter | Audit-only: no PowerShell/Graph API exists for this setting at all. |
 | `SharePointOnline-AzureADB2BIntegration` | SharePointOnline | See "Azure AD B2B integration: a known Microsoft-side deprecation" below - read this before treating a post-apply mismatch as a bug. |
@@ -128,6 +129,36 @@ root-caused, though never fully resolved, during this project's now-removed
 app-only-authentication work. The two controls are kept separate instead. See
 the comment on `Get-EntraID-BlockSelfServiceAppCreationState` in
 `EntraIdControls.psm1` for the full reasoning.
+
+### EntraID-BlockUserConsentToApps: matching CIS 5.1.5.1 exactly
+
+This control checks the same Graph property CIS Microsoft 365 Foundations
+Benchmark 5.1.5.1's own audit procedure does -
+`(Get-MgPolicyAuthorizationPolicy).DefaultUserRolePermissions.PermissionGrantPoliciesAssigned`
+- but CIS's audit only fails if either
+`ManagePermissionGrantsForSelf.microsoft-user-default-low` or
+`ManagePermissionGrantsForSelf.microsoft-user-default-legacy` is present in
+that array. It does not require the array to be empty.
+
+A real tenant can independently have
+`ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat`
+and `...-for-team` assigned - Teams/chat resource-specific consent (RSC), a
+separate mechanism that lets a user grant an app access to just a team or
+chat they own, scoped narrower than full org-wide consent. CIS 5.1.5.1
+doesn't check these at all, and disabling user consent via the Entra admin
+center's "Do not allow user consent" toggle does not clear them - that
+toggle only manages the `ManagePermissionGrantsForSelf.*` entry. An earlier
+version of this control required the whole array to be empty, which meant a
+tenant that was already fully CIS-compliant, with only RSC entries left
+over, was incorrectly reported as non-compliant.
+
+`desiredValue` now lists only the two CIS-banned policy ids, under
+`complianceMode: "ExcludesValues"` (see "How the config file works" above).
+Compliance is `true` whenever neither banned id is present, regardless of
+what else is assigned. `Set-EntraID-BlockUserConsentToAppsState` matches:
+on a non-compliant read it removes only the banned ids via a surgical PATCH,
+leaving every other assigned policy (including RSC entries) untouched -
+never a blanket overwrite to an empty array.
 
 ### The M365 Admin Center workload
 
@@ -488,11 +519,19 @@ before connecting to anything and will tell you exactly which id is missing
 its implementation (or which implemented control has no config entry) if
 they get out of sync.
 
-Two optional fields change how a control is evaluated, not what it does:
+Three optional fields change how a control is evaluated, not what it does:
 
 - `complianceMode: "Range"` — for controls like `EntraID-GlobalAdminCount`,
   where `desiredValue` is `{ "min": ..., "max": ... }` and the live value is
   a number that must fall inside that range, instead of matching exactly.
+- `complianceMode: "ExcludesValues"` — for a control that must only forbid
+  specific values rather than pin a whole collection to an exact shape.
+  `desiredValue`'s properties are each treated as a per-property array of
+  *banned* values: compliant means none of them appear in the live value's
+  same-named array, and every other entry already present is ignored (not
+  compared, not removed on Apply). `EntraID-BlockUserConsentToApps` uses this
+  to match CIS Microsoft 365 Foundations Benchmark 5.1.5.1 exactly — see the
+  note below.
 - `requiresPopulatedFields: ["domains"]` — names a property under
   `desiredValue` that Apply refuses to run with an empty value (see the
   DKIM/federation note above).
@@ -502,7 +541,12 @@ The config is validated against `config/baseline.config.schema.json` with
 (`Test-BaselineConfigSemantics` in `BaselineCore.psm1`) for checks JSON
 Schema alone can't express clearly (duplicate ids, an `automatable: false`
 control missing `manualInstructions`, a `Range` control without `min`/`max`,
+an `ExcludesValues` control whose `desiredValue` properties aren't arrays,
 etc.). Every validation failure names the specific control id and field.
+
+`EntraID-BlockUserConsentToApps` is this toolkit's one `ExcludesValues`
+control today — see "EntraID-BlockUserConsentToApps: matching CIS 5.1.5.1
+exactly" under "Controls worth extra attention" above for why.
 
 ## `Automatable: false` controls
 
