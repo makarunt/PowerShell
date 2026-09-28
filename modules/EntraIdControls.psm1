@@ -254,9 +254,10 @@ function Get-EntraID-BlockUserConsentToAppsState {
 function Set-EntraID-BlockUserConsentToAppsState {
     <#
     .SYNOPSIS
-        Idempotently strips every permission grant policy that isn't on the
-        allow-list from the permission grant policies assigned for user app
-        consent, leaving any allow-listed policy untouched.
+        Apply mode: idempotently strips every permission grant policy that
+        isn't on the allow-list, leaving any allow-listed policy untouched.
+        Restore mode (-Restoring): idempotently overwrites the array to
+        exactly match the snapshot value being restored to.
     .DESCRIPTION
         Matches CIS Microsoft 365 Foundations Benchmark 5.1.5.1's intent as an
         allow-list rather than a denylist against
@@ -275,16 +276,37 @@ function Set-EntraID-BlockUserConsentToAppsState {
         cleared. A fixed denylist of specific banned ids can't keep up with
         Microsoft adding new consent-policy ids over time; an allow-list of
         the few known-benign ids is safe by default against that. On a
-        non-compliant read, only the entries NOT on the allow-list are
-        stripped via a surgical PATCH that preserves every allow-listed entry
-        already present - never a blanket overwrite to [] the way most other
-        controls in this toolkit converge to their desired value.
+        non-compliant read during Apply, only the entries NOT on the
+        allow-list are stripped via a surgical PATCH that preserves every
+        allow-listed entry already present - it never adds an allow-listed
+        entry the tenant didn't already have, so Apply can't force-enable RSC
+        consent on its own.
+        That filtering is wrong for Restore, though: Invoke-BaselineControlRestore
+        passes a snapshot's recorded currentValue as -DesiredValue, and that
+        recorded value can itself be non-compliant (e.g. it may contain the
+        very consent-preset ids Apply would strip) - if it were run through
+        the same allow-list filter, those ids would be treated as "allowed"
+        just because they showed up in the snapshot, and restoring a tenant
+        that has since been fixed back down to just RSC entries would
+        silently no-op instead of recreating the exact recorded state
+        (confirmed against a real tenant: this was a real bug). -Restoring
+        switches this function to a literal overwrite instead: compliant
+        means the array exactly matches DesiredValue, and a mismatch writes
+        DesiredValue verbatim - which can both add back an entry the
+        snapshot had and the live tenant currently lacks, and remove one the
+        tenant has gained since - because recreating an exact historical
+        state is not the same operation as enforcing the ongoing allow-list.
     .PARAMETER DesiredValue
-        Object: { permissionGrantPoliciesAssigned: [ <allowed policy ids> ] } -
-        under complianceMode AllowsOnly this is the list of the only values
-        that may be present, not the full desired array state.
+        Apply: { permissionGrantPoliciesAssigned: [ <allowed policy ids> ] } -
+        the list of the only values that may be present, not the full desired
+        array state. Restore (-Restoring): the exact array value to restore
+        the tenant to, taken verbatim from the snapshot.
     .PARAMETER CurrentValue
         Optional pre-fetched current value.
+    .PARAMETER Restoring
+        Switches from Apply's allow-list filtering to a literal exact-match
+        overwrite. Pass this only when recreating a snapshot's recorded
+        value, never during a normal compliance-driven Apply run.
     .EXAMPLE
         Set-EntraID-BlockUserConsentToAppsState -DesiredValue ([pscustomobject]@{permissionGrantPoliciesAssigned=@('ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat','ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team')})
     #>
@@ -296,9 +318,24 @@ function Set-EntraID-BlockUserConsentToAppsState {
 
         [Parameter()]
         [AllowNull()]
-        [object]$CurrentValue
+        [object]$CurrentValue,
+
+        [Parameter()]
+        [switch]$Restoring
     )
     $current = if ($null -ne $CurrentValue) { $CurrentValue } else { (Get-EntraID-BlockUserConsentToAppsState).Value }
+
+    if ($Restoring) {
+        if (Test-BaselineCompliance -CurrentValue $current -DesiredValue $DesiredValue -ComplianceMode 'Equality') {
+            return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+        }
+        $restoredList = @($DesiredValue.permissionGrantPoliciesAssigned)
+        $body = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = $restoredList } }
+        Update-MgPolicyAuthorizationPolicy -BodyParameter $body -ErrorAction Stop
+        $applied = [pscustomobject]@{ permissionGrantPoliciesAssigned = $restoredList }
+        return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $applied; Message = 'Restored PermissionGrantPoliciesAssigned to its previously recorded value.' }
+    }
+
     if (Test-BaselineCompliance -CurrentValue $current -DesiredValue $DesiredValue -ComplianceMode 'AllowsOnly') {
         return [pscustomobject]@{ Id = 'EntraID-BlockUserConsentToApps'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }

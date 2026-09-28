@@ -337,6 +337,56 @@ Describe 'EntraID-BlockUserConsentToApps (allow-list: only RSC entries may be pr
             $result.AppliedValue.permissionGrantPoliciesAssigned | Should -Contain 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team'
         }
     }
+
+    Context 'Set-EntraID-BlockUserConsentToAppsState -Restoring (real-tenant regression: restore silently no-opped)' {
+        # A tenant's snapshot recorded a NON-compliant value (the "Let Microsoft
+        # manage consent" ids present). By the time Restore ran, the live tenant
+        # had already been fixed down to just the two RSC entries. Restore's
+        # normal (non-Restoring) allow-list filtering treats DesiredValue's
+        # array as "what's allowed" - so it read the snapshot's 4-entry value as
+        # an allow-list, saw the live 2-entry RSC-only state as a subset of it,
+        # and silently no-opped instead of recreating the exact recorded state.
+        It 'restores the exact recorded array, including entries the live tenant no longer has' {
+            Mock -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -MockWith { }
+            $liveCurrent = [pscustomobject]@{ permissionGrantPoliciesAssigned = @(
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat',
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team'
+            ) }
+            $snapshotValue = [pscustomobject]@{ permissionGrantPoliciesAssigned = @(
+                'ManagePermissionGrantsForSelf.microsoft-user-default-allow-consent-apps',
+                'ManagePermissionGrantsForSelf.microsoft-user-default-recommended',
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat',
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team'
+            ) }
+
+            $result = Set-EntraID-BlockUserConsentToAppsState -DesiredValue $snapshotValue -CurrentValue $liveCurrent -Restoring
+
+            $result.Status | Should -Be 'Success'
+            $result.Message | Should -Match 'Restored'
+            Should -Invoke -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -Times 1 -ParameterFilter {
+                $sent = @($BodyParameter.defaultUserRolePermissions.permissionGrantPoliciesAssigned)
+                $sent.Count -eq 4 -and
+                ($sent -contains 'ManagePermissionGrantsForSelf.microsoft-user-default-allow-consent-apps') -and
+                ($sent -contains 'ManagePermissionGrantsForSelf.microsoft-user-default-recommended') -and
+                ($sent -contains 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat') -and
+                ($sent -contains 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team')
+            }
+        }
+
+        It 'is a no-op when the live tenant already exactly matches the snapshot value' {
+            Mock -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -MockWith { }
+            $value = [pscustomobject]@{ permissionGrantPoliciesAssigned = @(
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat',
+                'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team'
+            ) }
+
+            $result = Set-EntraID-BlockUserConsentToAppsState -DesiredValue $value -CurrentValue $value -Restoring
+
+            $result.Status | Should -Be 'Success'
+            $result.Message | Should -Match 'Already compliant'
+            Should -Invoke -CommandName Update-MgPolicyAuthorizationPolicy -ModuleName EntraIdControls -Times 0
+        }
+    }
 }
 
 Describe 'EntraID-BlockSelfServiceAppCreation / EntraID-BlockSelfServiceSecurityGroupCreation overlap (v2 deviation)' {

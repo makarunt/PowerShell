@@ -1433,7 +1433,16 @@ function Invoke-BaselineControlRestore {
     .DESCRIPTION
         For each control in the snapshot, calls the same Set-<Id>State function used
         by Apply, but passes the snapshot's currentValue (captured at snapshot time)
-        as the value to converge to - never the live config's desiredValue.
+        as the value to converge to - never the live config's desiredValue. If that
+        Set- function declares a -Restoring switch parameter, it is passed as $true:
+        a Set- function whose Apply behavior filters DesiredValue (e.g. an AllowsOnly
+        control that only ever strips disallowed entries, never adds allowed-but-absent
+        ones) needs to know when it's being asked to recreate an exact historical
+        snapshot value instead - which can require ADDING back an entry the snapshot
+        had and the live tenant currently doesn't, something Apply's filtering must
+        never do. A Set- function that doesn't declare -Restoring is called exactly as
+        before; only a control whose Apply semantics aren't already a literal
+        current-equals-desired convergence needs to opt in.
     .PARAMETER Catalog
         Catalog entries from Get-BaselineControlCatalog (built from the *current* config,
         used only to resolve Set- function names / automatable flags).
@@ -1540,7 +1549,10 @@ function Invoke-BaselineControlRestore {
         }
 
         try {
-            $setResult = & $entry.SetCommand -DesiredValue $snap.currentValue -CurrentValue $null
+            $setParams = @{ DesiredValue = $snap.currentValue; CurrentValue = $null }
+            $setCommandInfo = Get-Command $entry.SetCommand -ErrorAction Stop
+            if ($setCommandInfo.Parameters.ContainsKey('Restoring')) { $setParams['Restoring'] = $true }
+            $setResult = & $entry.SetCommand @setParams
 
             if ($setResult.Status -eq $script:ResultStatus.Success) {
                 $mechanismPossiblyDeprecated = $entry.PSObject.Properties['MechanismPossiblyDeprecated'] -and [bool]$entry.MechanismPossiblyDeprecated

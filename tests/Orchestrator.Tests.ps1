@@ -249,6 +249,53 @@ Describe 'Restore-mode logic' {
             Remove-Item $logPath -ErrorAction SilentlyContinue
         }
     }
+
+    Context '-Restoring passthrough (regression: a filtering Set- function needs to know it is restoring, not applying)' {
+        # A Set- function whose Apply behavior only ever filters DesiredValue down
+        # (never adds an allowed-but-absent entry - see EntraID-BlockUserConsentToApps)
+        # cannot correctly recreate an arbitrary historical snapshot value using that
+        # same filtering logic: it may need to ADD BACK an entry the snapshot had and
+        # the live tenant no longer does. A Set- function opts into that distinction by
+        # declaring a -Restoring switch parameter; Invoke-BaselineControlRestore must
+        # detect and pass it only to functions that declare it.
+        BeforeEach {
+            $script:CapturedRestoringValue = 'not-called'
+            function global:Get-Fake-RestoreAware-State { [pscustomobject]@{ Id = 'Fake-RestoreAware'; Value = 'x' } }
+            function global:Set-Fake-RestoreAware-State {
+                param($DesiredValue, $CurrentValue, [switch]$Restoring)
+                $script:CapturedRestoringValue = [bool]$Restoring
+                [pscustomobject]@{ Id = 'Fake-RestoreAware'; Status = 'Success'; PreviousValue = $CurrentValue; AppliedValue = $DesiredValue; Message = 'Restored.' }
+            }
+        }
+
+        It 'passes -Restoring $true to a Set- function that declares the parameter' {
+            $catalog = @(
+                [pscustomobject]@{ Id = 'Fake-RestoreAware'; Workload = 'EntraID'; Connection = 'Graph'; Automatable = $true; DesiredValue = 'y'; Description = 'restore-aware test'; ComplianceMode = 'AllowsOnly'; ManualInstructions = ''; RequiresPopulatedFields = @(); GetCommand = 'Get-Fake-RestoreAware-State'; SetCommand = 'Set-Fake-RestoreAware-State' }
+            )
+            $snapshotControls = @([pscustomobject]@{ id = 'Fake-RestoreAware'; workload = 'EntraID'; currentValue = 'z'; desiredValue = 'y' })
+            $logPath = [System.IO.Path]::GetTempFileName()
+            try {
+                $results = Invoke-BaselineControlRestore -Catalog $catalog -SnapshotControls $snapshotControls -ChangeLogPath $logPath
+                $script:CapturedRestoringValue | Should -Be $true
+                ($results | Where-Object Id -eq 'Fake-RestoreAware').Status | Should -Be 'Success'
+            }
+            finally {
+                Remove-Item $logPath -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'does not pass -Restoring to a Set- function that does not declare the parameter (no regression)' {
+            # Same $script:Catalog/$script:SnapshotControls as the top-level BeforeEach,
+            # whose Set-Fake-RestoreState has no -Restoring parameter at all.
+            $logPath = [System.IO.Path]::GetTempFileName()
+            try {
+                { Invoke-BaselineControlRestore -Catalog $script:Catalog -SnapshotControls $script:SnapshotControls -ChangeLogPath $logPath } | Should -Not -Throw
+            }
+            finally {
+                Remove-Item $logPath -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 Describe 'Test-BaselineApplyOutcome (generic read-back-and-classify helper)' {

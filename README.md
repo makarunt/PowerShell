@@ -176,6 +176,30 @@ via a surgical PATCH, leaving RSC entries untouched - never a blanket
 overwrite to an empty array, and never limited to a fixed list of ids this
 toolkit already knew about.
 
+**That filtering behavior broke Restore, and needed its own fix.**
+Restore replays a snapshot by calling the same `Set-<Id>State` function Apply
+uses, passing the snapshot's recorded `currentValue` in as `-DesiredValue`
+(see "Restore" under "Running each mode" below). For every other control
+that works fine, because their `Set-` functions do a literal overwrite
+either way. It does not work for an allow-list control: a snapshot's
+recorded `currentValue` can itself be non-compliant (it may contain exactly
+the consent-preset ids Apply would strip), and if Restore ran that through
+the same allow-list filter, those ids would be treated as "allowed" just
+because they showed up in the snapshot - confirmed against a real tenant,
+this meant restoring a tenant that had since been fixed back down to just
+RSC entries silently did nothing, instead of recreating the exact state the
+snapshot recorded. `Set-EntraID-BlockUserConsentToAppsState` now accepts an
+opt-in `-Restoring` switch: when set, it compares and writes the array as a
+literal exact value instead of an allow-list, which can both add back an
+entry the snapshot had and the tenant has since lost, and remove one the
+tenant has gained since - recreating an exact historical state is not the
+same operation as enforcing the ongoing allow-list, and needs different
+logic. `Invoke-BaselineControlRestore` detects whether a control's `Set-`
+function declares `-Restoring` (via `Get-Command` parameter introspection)
+and only passes it when the function supports it, so every other control's
+`Set-` function - which never declared and never needs this parameter - is
+called exactly as before.
+
 ### The M365 Admin Center workload
 
 `M365AdminCenterControls.psm1` is a dedicated (if currently small) module for
@@ -510,6 +534,12 @@ with an empty domain list (there's no safe way to represent "DKIM was never
 configured" as an action). If a snapshot recorded an empty domain list for
 that control, restoring it will report `Failed` with an explanatory message
 rather than silently doing nothing — this is expected, not a bug.
+
+Note: `EntraID-BlockUserConsentToApps` is treated as an exact-value restore
+(recreating literally what the snapshot recorded), not the allow-list
+comparison Audit/Apply use for it — see "EntraID-BlockUserConsentToApps: an
+allow-list, not a denylist" above for why that distinction exists and how
+`-Restoring` is wired through.
 
 ## How the config file works, and how to change it safely
 
