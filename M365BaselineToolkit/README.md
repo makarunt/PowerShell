@@ -267,6 +267,21 @@ configured" as an action). If a snapshot recorded an empty domain list for
 that control, restoring it will report `Failed` with an explanatory message
 rather than silently doing nothing — this is expected, not a bug.
 
+Note: `SharePointOnline-DefaultLinkPermission` and
+`SharePointOnline-AnonymousLinkExpiration` can hit a similar wall. On a
+tenant where either setting was never explicitly configured,
+`Get-SPOTenant` reports SharePoint's own "unconfigured" sentinel
+(`DefaultLinkPermission = 'None'`, `RequireAnonymousLinksExpireInDays = -1`)
+— values a backup snapshot will faithfully capture as "current at capture
+time," but that `Set-SPOTenant` itself refuses to accept as input
+(`DefaultLinkPermission` only takes `View`/`Edit`; the expiration only
+takes `1`-`730`). There is no supported way to restore a tenant to "never
+configured" via PowerShell, so restoring either control from such a
+snapshot reports `Failed` with a message pointing you to the SharePoint
+admin center instead — expected, not a bug, and unrelated to anything the
+toolkit's Apply mode does (Apply never writes these sentinel values; they
+only ever show up here because Restore is replaying a snapshot).
+
 ## How the config file works, and how to change it safely
 
 Open `config/baseline.config.json`. Each entry in `controls` looks like:
