@@ -29,6 +29,14 @@ function Get-EntraID-UnifiedAuditLogState {
     .DESCRIPTION
         Uses Get-AdminAuditLogConfig (Exchange Online PowerShell), which is the
         Microsoft-documented surface for this tenant-wide setting.
+
+        Confirmed against a live tenant: this cmdlet has the same quirk
+        documented on ExchangeOnline-ExternalSenderTag's Get-/Set- functions -
+        passing -ErrorAction (any value, including Stop) makes it fail with a
+        generic "A server side error has occurred..." message, because that
+        disables the cmdlet's own internal transient-error retry; called
+        completely bare it succeeds reliably. So this call is made bare, with
+        this function's own try/catch-and-retry as the safety net instead.
     .EXAMPLE
         Get-EntraID-UnifiedAuditLogState
     #>
@@ -36,14 +44,42 @@ function Get-EntraID-UnifiedAuditLogState {
     [OutputType([pscustomobject])]
     param()
 
-    $cfg = Get-AdminAuditLogConfig -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'EntraID-UnifiedAuditLog'; Value = [bool]$cfg.UnifiedAuditLogIngestionEnabled }
+    $maxAttempts = 2
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            $cfg = Get-AdminAuditLogConfig
+            return [pscustomobject]@{ Id = 'EntraID-UnifiedAuditLog'; Value = [bool]$cfg.UnifiedAuditLogIngestionEnabled }
+        }
+        catch {
+            $lastError = [string]$_
+        }
+        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 3 }
+    }
+    throw "Get-AdminAuditLogConfig failed after $maxAttempts attempt(s): $lastError"
 }
 
 function Set-EntraID-UnifiedAuditLogState {
     <#
     .SYNOPSIS
         Idempotently sets unified audit log ingestion to the desired value.
+    .DESCRIPTION
+        Set-AdminAuditLogConfig has the same -ErrorAction quirk as
+        Get-AdminAuditLogConfig above (and as ExchangeOnline-ExternalSenderTag's
+        Set-ExternalInOutlook) - confirmed against a live tenant, called with
+        -ErrorAction Stop it fails with the same generic server-side error;
+        called bare it succeeds (Microsoft returns a warning that the change
+        can take up to 60 minutes to propagate, not an error). So this call
+        is made bare too, with this function's own try/catch-and-retry as the
+        safety net.
+
+        That up-to-60-minute propagation delay also means a post-apply
+        read-back very likely won't confirm the change immediately - this
+        toolkit's generic retry (a few seconds) is nowhere near long enough
+        to wait that out, and isn't meant to be. Expect this control to
+        report Applied-PendingConfirmation right after Apply even on a fully
+        successful run; re-audit later (well within 60 minutes) to confirm
+        it actually landed, rather than treating that status as a failure.
     .PARAMETER DesiredValue
         Boolean: true to enable ingestion.
     .PARAMETER CurrentValue
@@ -67,8 +103,24 @@ function Set-EntraID-UnifiedAuditLogState {
         return [pscustomobject]@{ Id = 'EntraID-UnifiedAuditLog'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
 
-    Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $DesiredValue -ErrorAction Stop
-    return [pscustomobject]@{ Id = 'EntraID-UnifiedAuditLog'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated UnifiedAuditLogIngestionEnabled.' }
+    $maxAttempts = 2
+    $lastError = $null
+    $succeeded = $false
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $DesiredValue
+            $succeeded = $true
+            break
+        }
+        catch {
+            $lastError = [string]$_
+        }
+        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 3 }
+    }
+    if (-not $succeeded) {
+        throw "Set-AdminAuditLogConfig failed after $maxAttempts attempt(s): $lastError"
+    }
+    return [pscustomobject]@{ Id = 'EntraID-UnifiedAuditLog'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated UnifiedAuditLogIngestionEnabled. Microsoft documents this can take up to 60 minutes to propagate - a post-apply read-back may not confirm it immediately; re-audit later to verify.' }
 }
 
 # ---------------------------------------------------------------------------

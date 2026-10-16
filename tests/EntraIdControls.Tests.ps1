@@ -10,6 +10,21 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../modules/BaselineCore.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot '../modules/EntraIdControls.psm1') -Force
 
+    # EntraID-UnifiedAuditLog is the one control in this file that calls an
+    # Exchange Online (not Graph) cmdlet - see BaselineCore's
+    # ControlConnectionOverrides. ExchangeOnlineManagement isn't necessarily
+    # installed wherever this suite runs, and Pester 5's Mock requires its
+    # target command to already be resolvable, so these stubs exist purely
+    # for Mock to find and replace - never reached once mocked. Declared only
+    # when the real cmdlet isn't already present, matching the same guarded
+    # pattern ExchangeOnlineControls.Tests.ps1 uses for every EXO cmdlet it mocks.
+    if (-not (Get-Command Get-AdminAuditLogConfig -ErrorAction SilentlyContinue)) {
+        function global:Get-AdminAuditLogConfig { [CmdletBinding()] param() }
+    }
+    if (-not (Get-Command Set-AdminAuditLogConfig -ErrorAction SilentlyContinue)) {
+        function global:Set-AdminAuditLogConfig { [CmdletBinding()] param([bool]$UnifiedAuditLogIngestionEnabled) }
+    }
+
     # Answers "was this field actually sent" rather than "what's its value" -
     # used to prove a Set- function's -BodyParameter is a single-field PATCH
     # that doesn't also touch a sibling field. A plain hashtable answers this
@@ -36,6 +51,70 @@ BeforeAll {
             return $false
         }
         return $null -ne $prop.Value
+    }
+}
+
+Describe 'EntraID-UnifiedAuditLog (Exchange Online cmdlet with an -ErrorAction quirk)' {
+
+    Context 'Get-EntraID-UnifiedAuditLogState' {
+        It 'reports the current value from a bare (no -ErrorAction) call' {
+            Mock -CommandName Get-AdminAuditLogConfig -ModuleName EntraIdControls -MockWith {
+                [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = $true }
+            }
+            (Get-EntraID-UnifiedAuditLogState).Value | Should -Be $true
+        }
+
+        It 'retries once after a failed read and succeeds on the second attempt' {
+            $script:attempt = 0
+            Mock -CommandName Get-AdminAuditLogConfig -ModuleName EntraIdControls -MockWith {
+                $script:attempt++
+                if ($script:attempt -eq 1) { throw 'A server side error has occurred because of which the operation could not be completed.' }
+                return [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = $false }
+            }
+            (Get-EntraID-UnifiedAuditLogState).Value | Should -Be $false
+            Should -Invoke -CommandName Get-AdminAuditLogConfig -ModuleName EntraIdControls -Times 2
+        }
+
+        It 'throws a clear error after both attempts fail' {
+            Mock -CommandName Get-AdminAuditLogConfig -ModuleName EntraIdControls -MockWith { throw 'A server side error has occurred...' }
+            { Get-EntraID-UnifiedAuditLogState } | Should -Throw '*Get-AdminAuditLogConfig failed after 2 attempt*'
+        }
+    }
+
+    Context 'Set-EntraID-UnifiedAuditLogState' {
+        It 'is a no-op when already compliant' {
+            Mock -CommandName Set-AdminAuditLogConfig -ModuleName EntraIdControls -MockWith { }
+            $result = Set-EntraID-UnifiedAuditLogState -DesiredValue $true -CurrentValue $true
+            $result.Status | Should -Be 'Success'
+            $result.Message | Should -Match 'Already compliant'
+            Should -Invoke -CommandName Set-AdminAuditLogConfig -ModuleName EntraIdControls -Times 0
+        }
+
+        It 'sets the value when non-compliant' {
+            Mock -CommandName Set-AdminAuditLogConfig -ModuleName EntraIdControls -MockWith { }
+            $result = Set-EntraID-UnifiedAuditLogState -DesiredValue $true -CurrentValue $false
+            $result.Status | Should -Be 'Success'
+            $result.Message | Should -Match '60 minutes'
+            Should -Invoke -CommandName Set-AdminAuditLogConfig -ModuleName EntraIdControls -Times 1 -ParameterFilter {
+                $UnifiedAuditLogIngestionEnabled -eq $true
+            }
+        }
+
+        It 'retries once after a failed write and succeeds on the second attempt (regression test for the real reported error)' {
+            $script:attempt = 0
+            Mock -CommandName Set-AdminAuditLogConfig -ModuleName EntraIdControls -MockWith {
+                $script:attempt++
+                if ($script:attempt -eq 1) { throw 'A server side error has occurred because of which the operation could not be completed. Please try again after some time. If the problem still persists, please reach out to MS support.' }
+            }
+            $result = Set-EntraID-UnifiedAuditLogState -DesiredValue $true -CurrentValue $false
+            $result.Status | Should -Be 'Success'
+            Should -Invoke -CommandName Set-AdminAuditLogConfig -ModuleName EntraIdControls -Times 2
+        }
+
+        It 'throws a clear error naming the real cmdlet after both attempts fail' {
+            Mock -CommandName Set-AdminAuditLogConfig -ModuleName EntraIdControls -MockWith { throw 'A server side error has occurred...' }
+            { Set-EntraID-UnifiedAuditLogState -DesiredValue $true -CurrentValue $false } | Should -Throw '*Set-AdminAuditLogConfig failed after 2 attempt*'
+        }
     }
 }
 

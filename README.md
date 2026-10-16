@@ -106,6 +106,7 @@ quirks, or otherwise deserve a closer read before running Apply against them.
 
 | Control | Workload | Notes |
 |---|---|---|
+| `EntraID-UnifiedAuditLog` | EntraID | `Get-`/`Set-AdminAuditLogConfig` must be called bare (no `-ErrorAction`) - confirmed live, passing `-ErrorAction` breaks the cmdlet's own internal retry and it fails with a generic "server side error" every time. Microsoft also documents this change can take up to 60 minutes to propagate, so `Applied-PendingConfirmation` right after a successful Apply is expected, not a failure - see "Report statuses" below. |
 | `EntraID-AdminConsentWorkflow` | EntraID | Requires `desiredValue.reviewers` to be populated before Apply will run - see "`Automatable: false` controls" below for the pattern this follows. |
 | `EntraID-BlockUserConsentToApps` | EntraID | Uses an allow-list (only Teams/chat resource-specific consent may be present), not CIS 5.1.5.1's literal two-id denylist - see "EntraID-BlockUserConsentToApps: an allow-list, not a denylist" below before assuming a non-empty `permissionGrantPoliciesAssigned` means non-compliant. |
 | `EntraID-BlockAgentBlueprintCreation` | EntraID | Calls a beta-only Graph endpoint (deliberate exception - see "EntraID-BlockAgentBlueprintCreation: MC1506733, a beta-endpoint exception" below), and can read `NotYetAvailable` or `Compliant: Unknown` on a tenant that hasn't received the November 2026 rollout yet - neither is a toolkit error. |
