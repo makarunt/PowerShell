@@ -428,6 +428,186 @@ function Set-EntraID-BlockSelfServiceAppCreationState {
 }
 
 # ---------------------------------------------------------------------------
+# EntraID-BlockAgentBlueprintCreation
+# ---------------------------------------------------------------------------
+
+# Beta-only as of this writing (Microsoft 365 message center post MC1506733;
+# rollout begins November 4, 2026, completing late November 2026) - no v1.0
+# Graph surface exists yet for defaultUserRolePermissions.allowedToCreateAgentIdentityBlueprints.
+# Kept in exactly one place so switching to v1.0, once/if Microsoft ships it
+# there, is a one-line change.
+#
+# This is a deliberate exception to this toolkit's general policy (see
+# Get-EntraID-GaNotLocalAdminOnJoinState above) of not calling beta Graph
+# endpoints for automated remediation: unlike that device-registration-policy
+# setting, Microsoft's own MC1506733 guidance is that admins CAN pre-configure
+# this one ahead of the rollout, there is no v1.0 alternative to wait for, and
+# a 400 response (the expected shape of "not rolled out to this tenant yet")
+# is classified as NotYetAvailable rather than Failed - see
+# Set-EntraID-BlockAgentBlueprintCreationState below. The blast radius of a
+# wrong write is also bounded: the PATCH touches only this one nested key, and
+# Set- refuses to report Success if defaultUserRolePermissions' other keys
+# (owned by EntraID-BlockSelfServiceAppCreation /
+# -BlockSelfServiceSecurityGroupCreation) changed as a side effect.
+$script:AgentBlueprintPolicyUri = 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy'
+
+function Get-EntraID-BlockAgentBlueprintCreationState {
+    <#
+    .SYNOPSIS
+        Reads whether default users (no built-in or custom Entra role) can
+        create agent identity blueprints.
+    .DESCRIPTION
+        Per MC1506733, starting November 4, 2026 (rollout completing late
+        November 2026) default users without any Entra role become able to
+        create agent identity blueprints - app-registration-like objects that
+        hold credentials for AI agents, whose creator becomes their owner -
+        unless an admin turns this off. Independent of
+        EntraID-BlockSelfServiceAppCreation's allowedToCreateApps, which does
+        not cover agent identity blueprints at all.
+
+        Until the feature reaches a given tenant,
+        defaultUserRolePermissions.allowedToCreateAgentIdentityBlueprints may
+        be entirely absent from the Graph response rather than present and
+        true/false. That case is reported as Value = $null with a Detail
+        explaining why - the same "never fabricate a reading we can't back
+        with a real API response" pattern this toolkit's other audit-only
+        placeholder controls already use - rather than guessing at Compliant.
+    .EXAMPLE
+        Get-EntraID-BlockAgentBlueprintCreationState
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
+    $policy = Invoke-MgGraphRequest -Method GET -Uri $script:AgentBlueprintPolicyUri -ErrorAction Stop
+    $permissions = Get-BaselinePropertyMap -Value $policy['defaultUserRolePermissions']
+    if (-not $permissions.Contains('allowedToCreateAgentIdentityBlueprints') -or $null -eq $permissions['allowedToCreateAgentIdentityBlueprints']) {
+        return [pscustomobject]@{
+            Id     = 'EntraID-BlockAgentBlueprintCreation'
+            Value  = $null
+            Detail = 'Setting not yet available in this tenant (MC1506733 rollout, November 2026): allowedToCreateAgentIdentityBlueprints is absent from the beta authorizationPolicy response. Apply will still attempt to pre-configure the desired value, since Microsoft documents that admins can set it ahead of the rollout.'
+        }
+    }
+    $value = [pscustomobject]@{ allowedToCreateAgentIdentityBlueprints = [bool]$permissions['allowedToCreateAgentIdentityBlueprints'] }
+    return [pscustomobject]@{ Id = 'EntraID-BlockAgentBlueprintCreation'; Value = $value }
+}
+
+function Set-EntraID-BlockAgentBlueprintCreationState {
+    <#
+    .SYNOPSIS
+        Idempotently sets whether default users can create agent identity
+        blueprints, PATCHing only that single nested key.
+    .DESCRIPTION
+        Always re-reads the full defaultUserRolePermissions object immediately
+        before the PATCH (not just this control's own property), and again
+        immediately after: the PATCH body sent only ever contains
+        allowedToCreateAgentIdentityBlueprints, but if Graph ever treats a
+        nested PATCH as a full replacement of defaultUserRolePermissions
+        rather than a merge, this would silently clobber the keys
+        EntraID-BlockSelfServiceAppCreation and
+        -BlockSelfServiceSecurityGroupCreation own
+        (allowedToCreateApps/-Tenants/-SecurityGroups, and any other key
+        present). If any key other than this control's own changed between
+        the before/after reads, this is reported as Failed - not Success, and
+        not routed through the orchestrator's normal pending-confirmation
+        read-back - naming exactly which key(s) changed, since that is a
+        correctness bug worth surfacing loudly rather than a propagation
+        delay.
+
+        A 400 response from the PATCH is classified as NotYetAvailable rather
+        than Failed: the expected shape of "this tenant hasn't received the
+        MC1506733 rollout yet" is Graph rejecting the unrecognized/unsupported
+        property, not a toolkit or credentials problem. Any other error is
+        left to propagate normally (ordinary Failed, same as every other
+        control in this toolkit).
+    .PARAMETER DesiredValue
+        Object: { allowedToCreateAgentIdentityBlueprints: bool }.
+    .PARAMETER CurrentValue
+        Accepted for signature consistency with every other Set-<Id>State
+        function in this toolkit (the orchestrator always passes one), but
+        intentionally unused for the compliance decision below: a fresh read
+        is already required immediately before the PATCH to capture the
+        sibling-key baseline, so reusing a caller-supplied value here would
+        mean deciding compliance against a potentially stale read instead.
+    .EXAMPLE
+        Set-EntraID-BlockAgentBlueprintCreationState -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints=$false})
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$DesiredValue,
+
+        [Parameter()]
+        [AllowNull()]
+        [object]$CurrentValue
+    )
+
+    $beforePolicy = Invoke-MgGraphRequest -Method GET -Uri $script:AgentBlueprintPolicyUri -ErrorAction Stop
+    $beforePermissions = Get-BaselinePropertyMap -Value $beforePolicy['defaultUserRolePermissions']
+    $current = if ($beforePermissions.Contains('allowedToCreateAgentIdentityBlueprints') -and $null -ne $beforePermissions['allowedToCreateAgentIdentityBlueprints']) {
+        [pscustomobject]@{ allowedToCreateAgentIdentityBlueprints = [bool]$beforePermissions['allowedToCreateAgentIdentityBlueprints'] }
+    }
+    else {
+        $null
+    }
+
+    if ($null -ne $current -and (Compare-BaselineValueDeep -Left $current -Right $DesiredValue)) {
+        return [pscustomobject]@{ Id = 'EntraID-BlockAgentBlueprintCreation'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
+    }
+
+    $body = @{ defaultUserRolePermissions = @{ allowedToCreateAgentIdentityBlueprints = [bool]$DesiredValue.allowedToCreateAgentIdentityBlueprints } } | ConvertTo-Json -Depth 5
+
+    try {
+        Invoke-MgGraphRequest -Method PATCH -Uri $script:AgentBlueprintPolicyUri -Body $body -ContentType 'application/json' -ErrorAction Stop
+    }
+    catch {
+        $statusCode = $null
+        if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response -and $_.Exception.Response.PSObject.Properties['StatusCode']) {
+            $statusCode = [int]$_.Exception.Response.StatusCode.value__
+        }
+        if ($statusCode -eq 400) {
+            return [pscustomobject]@{
+                Id            = 'EntraID-BlockAgentBlueprintCreation'
+                Status        = 'NotYetAvailable'
+                PreviousValue = $current
+                AppliedValue  = $null
+                Message       = "Microsoft Graph rejected the write (HTTP 400) for allowedToCreateAgentIdentityBlueprints - treated as not yet available in this tenant (MC1506733 rollout, November 2026), not a toolkit or configuration error. Original error: $($_.Exception.Message)"
+            }
+        }
+        throw
+    }
+
+    $afterPolicy = Invoke-MgGraphRequest -Method GET -Uri $script:AgentBlueprintPolicyUri -ErrorAction Stop
+    $afterPermissions = Get-BaselinePropertyMap -Value $afterPolicy['defaultUserRolePermissions']
+
+    $changedSiblingKeys = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in $beforePermissions.Keys) {
+        if ($key -eq 'allowedToCreateAgentIdentityBlueprints') { continue }
+        $beforeValue = $beforePermissions[$key]
+        $afterValue = if ($afterPermissions.Contains($key)) { $afterPermissions[$key] } else { $null }
+        if (-not (Compare-BaselineValueDeep -Left $beforeValue -Right $afterValue)) {
+            [void]$changedSiblingKeys.Add($key)
+        }
+    }
+    foreach ($key in $afterPermissions.Keys) {
+        if ($key -eq 'allowedToCreateAgentIdentityBlueprints') { continue }
+        if (-not $beforePermissions.Contains($key)) { [void]$changedSiblingKeys.Add($key) }
+    }
+
+    if ($changedSiblingKeys.Count -gt 0) {
+        return [pscustomobject]@{
+            Id            = 'EntraID-BlockAgentBlueprintCreation'
+            Status        = 'Failed'
+            PreviousValue = $current
+            AppliedValue  = $null
+            Message       = "The PATCH was sent for allowedToCreateAgentIdentityBlueprints only, but defaultUserRolePermissions key(s) changed unexpectedly: $($changedSiblingKeys -join ', '). Treated as a failure rather than success, since Graph appears to have replaced more of defaultUserRolePermissions than intended - verify EntraID-BlockSelfServiceAppCreation/-BlockSelfServiceSecurityGroupCreation's values manually before re-running."
+        }
+    }
+
+    return [pscustomobject]@{ Id = 'EntraID-BlockAgentBlueprintCreation'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated AllowedToCreateAgentIdentityBlueprints.' }
+}
+
+# ---------------------------------------------------------------------------
 # EntraID-BlockSelfServiceSecurityGroupCreation
 # ---------------------------------------------------------------------------
 
@@ -904,6 +1084,7 @@ Export-ModuleMember -Function @(
     'Get-EntraID-GuestUserRoleRestrictionState', 'Set-EntraID-GuestUserRoleRestrictionState'
     'Get-EntraID-BlockUserConsentToAppsState', 'Set-EntraID-BlockUserConsentToAppsState'
     'Get-EntraID-BlockSelfServiceAppCreationState', 'Set-EntraID-BlockSelfServiceAppCreationState'
+    'Get-EntraID-BlockAgentBlueprintCreationState', 'Set-EntraID-BlockAgentBlueprintCreationState'
     'Get-EntraID-BlockSelfServiceSecurityGroupCreationState', 'Set-EntraID-BlockSelfServiceSecurityGroupCreationState'
     'Get-EntraID-AdminConsentWorkflowState', 'Set-EntraID-AdminConsentWorkflowState'
     'Get-EntraID-GaNotLocalAdminOnJoinState', 'Set-EntraID-GaNotLocalAdminOnJoinState'

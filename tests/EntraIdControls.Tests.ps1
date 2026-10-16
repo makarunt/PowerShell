@@ -389,6 +389,155 @@ Describe 'EntraID-BlockUserConsentToApps (allow-list: only RSC entries may be pr
     }
 }
 
+Describe 'EntraID-BlockAgentBlueprintCreation (MC1506733, beta Graph endpoint)' {
+
+    Context 'Get-EntraID-BlockAgentBlueprintCreationState' {
+        It 'reports Compliant when the property is present and false' {
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false; allowedToCreateAgentIdentityBlueprints = $false } }
+            }
+            $result = Get-EntraID-BlockAgentBlueprintCreationState
+            $result.Value.allowedToCreateAgentIdentityBlueprints | Should -Be $false
+            Test-BaselineCompliance -CurrentValue $result.Value -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false}) | Should -Be $true
+        }
+
+        It 'reports Non-compliant when the property is present and true' {
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false; allowedToCreateAgentIdentityBlueprints = $true } }
+            }
+            $result = Get-EntraID-BlockAgentBlueprintCreationState
+            Test-BaselineCompliance -CurrentValue $result.Value -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false}) | Should -Be $false
+        }
+
+        It 'reports Value=$null with a not-yet-available Detail when the property is absent (pre-MC1506733-rollout tenant)' {
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false } }
+            }
+            $result = Get-EntraID-BlockAgentBlueprintCreationState
+            $result.Value | Should -Be $null
+            $result.Detail | Should -Match 'not yet available'
+            Test-BaselineCompliance -CurrentValue $result.Value -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false}) | Should -Be $null
+        }
+    }
+
+    Context 'Set-EntraID-BlockAgentBlueprintCreationState' {
+        It 'sends exactly one PATCH to the configured beta URI, with only the single nested key' {
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                if ($Method -eq 'GET') { return @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false; allowedToCreateTenants = $false; allowedToCreateAgentIdentityBlueprints = $true } } }
+            }
+            $result = Set-EntraID-BlockAgentBlueprintCreationState -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false})
+            $result.Status | Should -Be 'Success'
+            Should -Invoke -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -Times 1 -ParameterFilter {
+                $Method -eq 'PATCH' -and
+                $Uri -eq 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -and
+                $ContentType -eq 'application/json' -and
+                (($Body | ConvertFrom-Json).defaultUserRolePermissions.PSObject.Properties.Name -join ',') -eq 'allowedToCreateAgentIdentityBlueprints' -and
+                (($Body | ConvertFrom-Json).defaultUserRolePermissions.allowedToCreateAgentIdentityBlueprints) -eq $false
+            }
+        }
+
+        It 'sends no PATCH when already compliant' {
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                if ($Method -eq 'GET') { return @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false; allowedToCreateAgentIdentityBlueprints = $false } } }
+            }
+            $result = Set-EntraID-BlockAgentBlueprintCreationState -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false})
+            $result.Status | Should -Be 'Success'
+            $result.Message | Should -Match 'Already compliant'
+            Should -Invoke -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -ParameterFilter { $Method -eq 'PATCH' } -Times 0
+        }
+
+        It 'still attempts the PATCH when the property was absent before Apply (pre-rollout tenant)' {
+            # Per MC1506733, Microsoft documents that admins can pre-configure this setting
+            # ahead of the rollout - so an absent/null read must not short-circuit Apply.
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                if ($Method -eq 'GET') { return @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false } } }
+            }
+            $result = Set-EntraID-BlockAgentBlueprintCreationState -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false})
+            $result.Status | Should -Be 'Success'
+            Should -Invoke -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -ParameterFilter { $Method -eq 'PATCH' } -Times 1
+        }
+
+        It 'classifies a mocked 400 (unrecognized property) as NotYetAvailable, not Failed' {
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                if ($Method -eq 'GET') { return @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false } } }
+                if ($Method -eq 'PATCH') {
+                    $response = [pscustomobject]@{ StatusCode = [System.Net.HttpStatusCode]::BadRequest }
+                    $ex = [System.Exception]::new('Response status code does not indicate success: 400 (Bad Request).')
+                    $ex | Add-Member -MemberType NoteProperty -Name Response -Value $response -Force
+                    throw $ex
+                }
+            }
+            $result = Set-EntraID-BlockAgentBlueprintCreationState -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false})
+            $result.Status | Should -Be 'NotYetAvailable'
+            $result.Message | Should -Match 'not yet available'
+        }
+
+        It 'classifies a sibling-key change after PATCH as Failed, naming the changed key' {
+            # Guards against Graph ever treating the nested PATCH as a full replacement of
+            # defaultUserRolePermissions instead of a merge - would otherwise silently
+            # clobber EntraID-BlockSelfServiceAppCreation's allowedToCreateApps.
+            $script:getCallIndex = 0
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                if ($Method -eq 'GET') {
+                    $script:getCallIndex++
+                    if ($script:getCallIndex -eq 1) {
+                        return @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false; allowedToCreateTenants = $false; allowedToCreateAgentIdentityBlueprints = $true } }
+                    }
+                    return @{ defaultUserRolePermissions = @{ allowedToCreateApps = $true; allowedToCreateTenants = $false; allowedToCreateAgentIdentityBlueprints = $false } }
+                }
+            }
+            $result = Set-EntraID-BlockAgentBlueprintCreationState -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false})
+            $result.Status | Should -Be 'Failed'
+            $result.Message | Should -Match 'allowedToCreateApps'
+        }
+
+        It 'restores (converges to) a backed-up true value, same code path as Apply' {
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                if ($Method -eq 'GET') { return @{ defaultUserRolePermissions = @{ allowedToCreateApps = $false; allowedToCreateAgentIdentityBlueprints = $false } } }
+            }
+            $result = Set-EntraID-BlockAgentBlueprintCreationState -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $true}) -CurrentValue $null
+            $result.Status | Should -Be 'Success'
+            Should -Invoke -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -Times 1 -ParameterFilter {
+                $Method -eq 'PATCH' -and (($Body | ConvertFrom-Json).defaultUserRolePermissions.allowedToCreateAgentIdentityBlueprints) -eq $true
+            }
+        }
+    }
+
+    Context 'Read-back classification (reuses the generic Test-BaselineApplyOutcome helper)' {
+        It 'reports Success when a mismatch on the first read is followed by a matching retry' {
+            $script:readCount = 0
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                $script:readCount++
+                $value = if ($script:readCount -eq 1) { $true } else { $false }
+                @{ defaultUserRolePermissions = @{ allowedToCreateAgentIdentityBlueprints = $value } }
+            }
+            $outcome = Test-BaselineApplyOutcome -GetCommand 'Get-EntraID-BlockAgentBlueprintCreationState' -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false}) -RetryDelayMilliseconds 0
+            $outcome.Status | Should -Be 'Success'
+            $outcome.Confirmed | Should -Be $true
+        }
+
+        It 'reports Applied-PendingConfirmation when the mismatch persists after the retry' {
+            Mock -CommandName Invoke-MgGraphRequest -ModuleName EntraIdControls -MockWith {
+                param($Method, $Uri, $Body, $ContentType)
+                @{ defaultUserRolePermissions = @{ allowedToCreateAgentIdentityBlueprints = $true } }
+            }
+            $outcome = Test-BaselineApplyOutcome -GetCommand 'Get-EntraID-BlockAgentBlueprintCreationState' -DesiredValue ([pscustomobject]@{allowedToCreateAgentIdentityBlueprints = $false}) -RetryDelayMilliseconds 0
+            $outcome.Status | Should -Be 'Applied-PendingConfirmation'
+            $outcome.Confirmed | Should -Be $false
+        }
+    }
+}
+
 Describe 'EntraID-BlockSelfServiceAppCreation / EntraID-BlockSelfServiceSecurityGroupCreation overlap (v2 deviation)' {
 
     It 'BlockSelfServiceAppCreation does NOT gain an allowedToCreateSecurityGroups field (kept as a separate control)' {

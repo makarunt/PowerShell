@@ -59,6 +59,14 @@
       "description": "Regular users cannot register new app registrations or create new Entra ID tenants."
     },
     {
+      "id": "EntraID-BlockAgentBlueprintCreation",
+      "workload": "EntraID",
+      "enabled": true,
+      "automatable": true,
+      "desiredValue": { "allowedToCreateAgentIdentityBlueprints": false },
+      "description": "Default users (no built-in or custom Entra role) cannot create agent identity blueprints - app-registration-like objects that hold credentials for AI agents, whose creator becomes their owner. Per Microsoft 365 message center post MC1506733, this is enabled by default for all default users starting November 4, 2026 (rollout completing late November 2026) unless an admin turns it off. Independent of EntraID-BlockSelfServiceAppCreation's allowedToCreateApps, which does not cover this. People who legitimately need to build agents should be given the Agent ID Developer role (or Agent ID Administrator) rather than this setting being left enabled tenant-wide - this toolkit does not automate that role assignment, it is a manual admin decision."
+    },
+    {
       "id": "EntraID-BlockSelfServiceSecurityGroupCreation",
       "workload": "EntraID",
       "enabled": true,

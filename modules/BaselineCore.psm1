@@ -117,6 +117,12 @@ $script:WorkloadToConnectionDefault = @{
 # landed" as distinct from Failed, which means the Set- call itself threw. See
 # Test-BaselineApplyOutcome for the full rationale (propagation delay vs. a
 # mechanism Microsoft is known to be silently retiring tenant-by-tenant).
+#
+# NotYetAvailable, unlike the two above, IS returned directly by a control's own
+# Set- function (currently only EntraID-BlockAgentBlueprintCreation): the backend
+# rejected the write because the underlying feature/property hasn't rolled out to
+# this tenant yet (observed as a 400 from Graph), not because anything is actually
+# wrong with the toolkit, the config, or the tenant's connectivity/permissions.
 $script:ResultStatus = @{
     Success                     = 'Success'
     Failed                      = 'Failed'
@@ -125,6 +131,7 @@ $script:ResultStatus = @{
     SkippedDisabled             = 'Skipped-Disabled'
     AppliedPendingConfirmation  = 'Applied-PendingConfirmation'
     MechanismPossiblyDeprecated = 'MechanismPossiblyDeprecated'
+    NotYetAvailable             = 'NotYetAvailable'
 }
 
 # ---------------------------------------------------------------------------

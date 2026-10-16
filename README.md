@@ -17,7 +17,7 @@ The authoritative source is always `config/baseline.config.json` itself;
 this table is generated from it and kept in sync by hand, not the other way
 around.
 
-### EntraID (13)
+### EntraID (14)
 
 | Id | Automatable | What it checks |
 |---|---|---|
@@ -27,6 +27,7 @@ around.
 | `EntraID-GuestUserRoleRestriction` | Automated | Guest users are placed in the Restricted Guest User role. |
 | [`EntraID-BlockUserConsentToApps`](#entraid-blockuserconsenttoapps-an-allow-list-not-a-denylist) \* | Automated | Non-admin users cannot consent to apps requesting org data (CIS 5.1.5.1 - see note below). |
 | `EntraID-BlockSelfServiceAppCreation` | Automated | Regular users cannot register app registrations or create tenants. |
+| [`EntraID-BlockAgentBlueprintCreation`](#entraid-blockagentblueprintcreation-mc1506733-a-beta-endpoint-exception) \* | Automated | Default users (no Entra role) cannot create agent identity blueprints (MC1506733, Nov 2026 - see note below). |
 | `EntraID-BlockSelfServiceSecurityGroupCreation` | Automated | Regular users cannot create security groups. |
 | [`EntraID-RestrictAdminPortalAccess`](#automatable-false-controls) \* | Manual | Admin portal access is restricted to admins only. |
 | [`EntraID-AuthMethodsHardening`](#automatable-false-controls) \* | Manual | Microsoft Authenticator enabled, SMS/Voice disabled tenant-wide. |
@@ -70,7 +71,7 @@ around.
 | `SharePointOnline-GuestAccessExpiration` | Automated | Named external guest accounts lose access automatically after 30 days. |
 | `SharePointOnline-GuestReauthentication` | Automated | External guests re-verify identity via emailed one-time passcode every 15 days. |
 | [`SharePointOnline-AzureADB2BIntegration`](#azure-ad-b2b-integration-a-known-microsoft-side-deprecation) \* | Automated | External sharing is integrated with Entra ID (Azure AD) B2B invitations. |
-| [`SharePointOnline-PreventGuestResharing`](#report-statuses-skipped-manual-applied-pendingconfirmation-mechanismpossiblydeprecated) \* | Automated | External (guest) users cannot reshare files/folders they only have access to via sharing. |
+| [`SharePointOnline-PreventGuestResharing`](#report-statuses-skipped-manual-applied-pendingconfirmation-mechanismpossiblydeprecated-notyetavailable) \* | Automated | External (guest) users cannot reshare files/folders they only have access to via sharing. |
 | `SharePointOnline-LegacyAuthProtocols` | Automated | Legacy (non-modern-auth) client protocols are blocked. |
 | `SharePointOnline-IdleSessionSignOut` | Automated | Idle browser sessions are warned, then signed out automatically. |
 
@@ -107,6 +108,7 @@ quirks, or otherwise deserve a closer read before running Apply against them.
 |---|---|---|
 | `EntraID-AdminConsentWorkflow` | EntraID | Requires `desiredValue.reviewers` to be populated before Apply will run - see "`Automatable: false` controls" below for the pattern this follows. |
 | `EntraID-BlockUserConsentToApps` | EntraID | Uses an allow-list (only Teams/chat resource-specific consent may be present), not CIS 5.1.5.1's literal two-id denylist - see "EntraID-BlockUserConsentToApps: an allow-list, not a denylist" below before assuming a non-empty `permissionGrantPoliciesAssigned` means non-compliant. |
+| `EntraID-BlockAgentBlueprintCreation` | EntraID | Calls a beta-only Graph endpoint (deliberate exception - see "EntraID-BlockAgentBlueprintCreation: MC1506733, a beta-endpoint exception" below), and can read `NotYetAvailable` or `Compliant: Unknown` on a tenant that hasn't received the November 2026 rollout yet - neither is a toolkit error. |
 | `EntraID-GaNotLocalAdminOnJoin` | EntraID | Audit-only: Preview feature, no stable (v1.0) Graph/PowerShell API as of this writing. |
 | `M365AdminCenter-SwayExternalSharing` | M365AdminCenter | Audit-only: no PowerShell/Graph API exists for this setting at all. |
 | `SharePointOnline-AzureADB2BIntegration` | SharePointOnline | See "Azure AD B2B integration: a known Microsoft-side deprecation" below - read this before treating a post-apply mismatch as a bug. |
@@ -200,6 +202,65 @@ and only passes it when the function supports it, so every other control's
 `Set-` function - which never declared and never needs this parameter - is
 called exactly as before.
 
+### EntraID-BlockAgentBlueprintCreation: MC1506733, a beta-endpoint exception
+
+Per Microsoft 365 message center post **MC1506733**, starting **November 4,
+2026** (rollout completing late November 2026) default users - anyone
+without a built-in or custom Entra role - become able to create *agent
+identity blueprints* unless an admin turns this off. A blueprint is an
+app-registration-like object that holds credentials for an AI agent; the
+user who creates it becomes its owner, able to manage its credentials, add
+other owners, and create agent identities from it. This is **independent of
+`EntraID-BlockSelfServiceAppCreation`'s `allowedToCreateApps`**, which does
+not cover agent identity blueprints at all - disabling self-service app
+registration does not also disable this.
+
+**This is the one deliberate exception in this toolkit to not calling beta
+Graph endpoints for automated remediation** (see
+`EntraID-GaNotLocalAdminOnJoin` above for the general policy). Confirmed
+against current Microsoft documentation:
+`defaultUserRolePermissions.allowedToCreateAgentIdentityBlueprints` exists
+only on the beta `authorizationPolicy` endpoint as of this writing, with no
+v1.0 surface yet. Unlike the device-registration-policy setting
+`EntraID-GaNotLocalAdminOnJoin` is stuck on, Microsoft's own MC1506733
+guidance is that admins *can* pre-configure this setting ahead of the
+rollout, and there is no v1.0 alternative to wait for instead - so this
+control calls `Invoke-MgGraphRequest` directly against the beta URI (kept in
+one `$script:AgentBlueprintPolicyUri` constant in `EntraIdControls.psm1`, so
+switching to v1.0 later is a one-line change) rather than taking a
+dependency on the `Microsoft.Graph.Beta` modules.
+
+**Pre-rollout behavior.** Until a tenant receives the rollout, the property
+may be entirely absent from the Graph response. Audit reports this as
+`Compliant: Unknown` with a Detail explaining why - never guessed as
+compliant or non-compliant. Apply still attempts the PATCH regardless (per
+Microsoft's own pre-configure guidance); if Graph rejects it with an HTTP
+400 because the property isn't recognized yet, that's reported as the
+**`NotYetAvailable`** status (see "Report statuses" below) rather than
+`Failed` - this is the expected shape of "not rolled out to this tenant
+yet," not a toolkit or credentials problem. Any other error is an ordinary
+`Failed`, same as every other control.
+
+**Sibling-key guard.** `Set-EntraID-BlockAgentBlueprintCreationState` reads
+the full `defaultUserRolePermissions` object immediately before and
+immediately after its PATCH (not just its own property). The PATCH body
+sent only ever contains `allowedToCreateAgentIdentityBlueprints`, but if
+Graph ever treated that nested PATCH as a full replacement of
+`defaultUserRolePermissions` instead of a merge, it would silently clobber
+the keys `EntraID-BlockSelfServiceAppCreation` and
+`-BlockSelfServiceSecurityGroupCreation` own
+(`allowedToCreateApps`/`-Tenants`/`-SecurityGroups`, and any other key
+present). If any key other than this control's own changed between the two
+reads, the result is `Failed` - not `Success`, and not routed through the
+normal pending-confirmation read-back - naming exactly which key(s)
+changed, since that's a correctness bug worth surfacing loudly rather than
+treating it as ordinary propagation delay.
+
+**People who legitimately need to build agents** should be given the
+**Agent ID Developer** role (or Agent ID Administrator), not left with this
+setting enabled tenant-wide. This toolkit does not automate that role
+assignment - it's a manual admin decision, stated here as guidance only.
+
 ### The M365 Admin Center workload
 
 `M365AdminCenterControls.psm1` is a dedicated (if currently small) module for
@@ -215,14 +276,16 @@ live check most likely goes through Microsoft Graph, the same way
 `EntraIdControls.psm1` does - no separate connection path was built
 speculatively ahead of an actual need.
 
-### Report statuses: `Skipped-Manual`, `Applied-PendingConfirmation`, `MechanismPossiblyDeprecated`
+### Report statuses: `Skipped-Manual`, `Applied-PendingConfirmation`, `MechanismPossiblyDeprecated`, `NotYetAvailable`
 
-Every Apply/Restore result carries a `Status`. Three of them matter for
+Every Apply/Restore result carries a `Status`. Four of them matter for
 reading a report correctly. `Applied-PendingConfirmation` and
 `MechanismPossiblyDeprecated` are produced only by a generic post-apply
 read-back-and-classify helper (`Test-BaselineApplyOutcome` in
 `BaselineCore.psm1`), never returned directly by a control's own `Set-`
-function:
+function; `NotYetAvailable` is the opposite - returned directly by a
+control's own `Set-` function, currently only
+`EntraID-BlockAgentBlueprintCreation`:
 
 - **`Skipped-Manual`** — no automated remediation exists for this control
   (`automatable: false` in config). Apply/Restore never call its `Set-`
@@ -246,9 +309,18 @@ function:
   that kind of migration, so the report says so explicitly rather than
   presenting it as an ordinary compliance failure that looks like a toolkit
   bug.
+- **`NotYetAvailable`** — the `Set-` call attempted the write, and Microsoft
+  Graph rejected it (HTTP 400) because the underlying feature/property
+  hasn't rolled out to this tenant yet - not because of a toolkit,
+  credentials, or configuration problem. Currently only
+  `EntraID-BlockAgentBlueprintCreation`, ahead of MC1506733's November 2026
+  rollout (see "Controls worth extra attention" above). Distinct from
+  `Skipped-Manual` (which never even attempts a write) and from `Failed`
+  (which means the write failed for an actual error).
 
-Both new statuses are produced by the same reusable, control-agnostic
-mechanism (`Test-BaselineApplyOutcome`), invoked automatically by
+`Applied-PendingConfirmation` and `MechanismPossiblyDeprecated` are produced
+by the same reusable, control-agnostic mechanism
+(`Test-BaselineApplyOutcome`), invoked automatically by
 `Invoke-BaselineControlApply`/`Invoke-BaselineControlRestore` after any
 control's `Set-` call reports success - not hand-wired per control. They
 should never appear for a control whose write-then-read is normally
@@ -393,6 +465,13 @@ trade-off here.
   `MicrosoftTeams` (v6+), `Microsoft.Online.SharePoint.PowerShell`. The
   toolkit checks these at the start of every run and can install missing
   ones for you.
+- `EntraID-BlockAgentBlueprintCreation` reads/writes the same
+  `authorizationPolicy` singleton as `EntraID-BlockSelfServiceAppCreation`
+  and needs the same permission (`Policy.ReadWrite.Authorization`, already
+  in the scope list above) — nothing new to consent to. It calls
+  `Invoke-MgGraphRequest` directly against the beta endpoint rather than a
+  typed `Microsoft.Graph` cmdlet; see "EntraID-BlockAgentBlueprintCreation:
+  MC1506733, a beta-endpoint exception" above for why.
 
 ## Installing required modules
 
