@@ -50,6 +50,12 @@ BeforeAll {
     if (-not (Get-Command New-DkimSigningConfig -ErrorAction SilentlyContinue)) {
         function global:New-DkimSigningConfig { [CmdletBinding()] param([string]$DomainName, [bool]$Enabled) }
     }
+    if (-not (Get-Command Get-ExternalInOutlook -ErrorAction SilentlyContinue)) {
+        function global:Get-ExternalInOutlook { [CmdletBinding()] param() }
+    }
+    if (-not (Get-Command Set-ExternalInOutlook -ErrorAction SilentlyContinue)) {
+        function global:Set-ExternalInOutlook { [CmdletBinding()] param([switch]$Enabled) }
+    }
 }
 
 Describe 'ExchangeOnline-MailboxAuditingDefault' {
@@ -80,6 +86,67 @@ Describe 'ExchangeOnline-MailboxAuditingDefault' {
             $result = Set-ExchangeOnline-MailboxAuditingDefaultState -DesiredValue $true -CurrentValue $true
             $result.Message | Should -Match 'Already compliant'
             Should -Invoke -CommandName Set-OrganizationConfig -ModuleName ExchangeOnlineControls -Times 0
+        }
+    }
+}
+
+Describe 'ExchangeOnline-ExternalSenderTag' {
+
+    Context 'Get-ExchangeOnline-ExternalSenderTagState' {
+        It 'reports Compliant via Value from a bare (no -ErrorAction) Get-ExternalInOutlook call' {
+            Mock -CommandName Get-ExternalInOutlook -ModuleName ExchangeOnlineControls -MockWith {
+                [pscustomobject]@{ Enabled = $true }
+            }
+            (Get-ExchangeOnline-ExternalSenderTagState).Value | Should -Be $true
+        }
+
+        It 'retries once after a failed read and succeeds on the second attempt' {
+            $script:attempt = 0
+            Mock -CommandName Get-ExternalInOutlook -ModuleName ExchangeOnlineControls -MockWith {
+                $script:attempt++
+                if ($script:attempt -eq 1) { throw 'A server side error has occurred...' }
+                return [pscustomobject]@{ Enabled = $false }
+            }
+            (Get-ExchangeOnline-ExternalSenderTagState).Value | Should -Be $false
+            Should -Invoke -CommandName Get-ExternalInOutlook -ModuleName ExchangeOnlineControls -Times 2
+        }
+
+        It 'throws a clear error after both attempts fail' {
+            Mock -CommandName Get-ExternalInOutlook -ModuleName ExchangeOnlineControls -MockWith { throw 'A server side error has occurred...' }
+            { Get-ExchangeOnline-ExternalSenderTagState } | Should -Throw '*failed after 2 attempt*'
+        }
+    }
+
+    Context 'Set-ExchangeOnline-ExternalSenderTagState' {
+        It 'is a no-op when already compliant' {
+            Mock -CommandName Set-ExternalInOutlook -ModuleName ExchangeOnlineControls -MockWith { }
+            $result = Set-ExchangeOnline-ExternalSenderTagState -DesiredValue $true -CurrentValue $true
+            $result.Status | Should -Be 'Success'
+            $result.Message | Should -Match 'Already compliant'
+            Should -Invoke -CommandName Set-ExternalInOutlook -ModuleName ExchangeOnlineControls -Times 0
+        }
+
+        It 'sets the value when non-compliant' {
+            Mock -CommandName Set-ExternalInOutlook -ModuleName ExchangeOnlineControls -MockWith { }
+            $result = Set-ExchangeOnline-ExternalSenderTagState -DesiredValue $false -CurrentValue $true
+            $result.Status | Should -Be 'Success'
+            Should -Invoke -CommandName Set-ExternalInOutlook -ModuleName ExchangeOnlineControls -Times 1 -ParameterFilter { $Enabled -eq $false }
+        }
+
+        It 'retries once after a failed write and succeeds on the second attempt (regression test: no longer falls back to the nonexistent New-ExternalInOutlook cmdlet)' {
+            $script:attempt = 0
+            Mock -CommandName Set-ExternalInOutlook -ModuleName ExchangeOnlineControls -MockWith {
+                $script:attempt++
+                if ($script:attempt -eq 1) { throw 'A server side error has occurred...' }
+            }
+            $result = Set-ExchangeOnline-ExternalSenderTagState -DesiredValue $false -CurrentValue $true
+            $result.Status | Should -Be 'Success'
+            Should -Invoke -CommandName Set-ExternalInOutlook -ModuleName ExchangeOnlineControls -Times 2
+        }
+
+        It 'throws a clear error naming the real cmdlet after both attempts fail, never mentioning New-ExternalInOutlook' {
+            Mock -CommandName Set-ExternalInOutlook -ModuleName ExchangeOnlineControls -MockWith { throw 'A server side error has occurred...' }
+            { Set-ExchangeOnline-ExternalSenderTagState -DesiredValue $false -CurrentValue $true } | Should -Throw '*Set-ExternalInOutlook failed after 2 attempt*'
         }
     }
 }

@@ -380,9 +380,28 @@ function Get-ExchangeOnline-ExternalSenderTagState {
 function Set-ExchangeOnline-ExternalSenderTagState {
     <#
     .SYNOPSIS
-        Idempotently enables/disables the external sender tag feature. Falls back
-        to New-ExternalInOutlook if the feature has never been initialized in this
-        tenant (Set-ExternalInOutlook requires an existing configuration object).
+        Idempotently enables/disables the external sender tag feature.
+    .DESCRIPTION
+        Confirmed against a live tenant: Set-ExternalInOutlook has the exact
+        same quirk documented on Get-ExchangeOnline-ExternalSenderTagState
+        above - called with -ErrorAction (any value, including Stop) it fails
+        with a generic "server side error", because that disables the
+        cmdlet's own internal transient-error retry; called completely bare
+        it succeeds reliably. So this call is made bare too, with this
+        function's own try/catch-and-retry as the safety net instead,
+        mirroring the Get- function's pattern exactly.
+
+        This used to fall back to New-ExternalInOutlook on any
+        Set-ExternalInOutlook failure, on the assumption a separate "create"
+        step was needed the first time this feature was configured in a
+        tenant. That cmdlet does not exist - confirmed against Microsoft's
+        own documentation for this feature, which lists only Get-/
+        Set-ExternalInOutlook; Set- alone handles both create and update - so
+        every Set-ExternalInOutlook failure, including the transient
+        -ErrorAction-triggered ones this function now retries past instead,
+        was being masked by a "term not recognized" error rather than
+        surfacing the real cause. Removed entirely rather than fixed, since
+        it was never a real recovery path to begin with.
     .PARAMETER DesiredValue
         Boolean.
     .PARAMETER CurrentValue
@@ -404,11 +423,22 @@ function Set-ExchangeOnline-ExternalSenderTagState {
     if ($current -eq $DesiredValue) {
         return [pscustomobject]@{ Id = 'ExchangeOnline-ExternalSenderTag'; Status = 'Success'; PreviousValue = $current; AppliedValue = $current; Message = 'Already compliant (no-op).' }
     }
-    try {
-        Set-ExternalInOutlook -Enabled:$DesiredValue -ErrorAction Stop
+    $maxAttempts = 2
+    $lastError = $null
+    $succeeded = $false
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            Set-ExternalInOutlook -Enabled:$DesiredValue
+            $succeeded = $true
+            break
+        }
+        catch {
+            $lastError = [string]$_
+        }
+        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 3 }
     }
-    catch {
-        New-ExternalInOutlook -Enabled:$DesiredValue -ErrorAction Stop
+    if (-not $succeeded) {
+        throw "Set-ExternalInOutlook failed after $maxAttempts attempt(s): $lastError"
     }
     return [pscustomobject]@{ Id = 'ExchangeOnline-ExternalSenderTag'; Status = 'Success'; PreviousValue = $current; AppliedValue = $DesiredValue; Message = 'Updated ExternalInOutlook.' }
 }
