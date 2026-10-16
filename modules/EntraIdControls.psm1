@@ -558,7 +558,7 @@ function Set-EntraID-BlockAgentBlueprintCreationState {
     $body = @{ defaultUserRolePermissions = @{ allowedToCreateAgentIdentityBlueprints = [bool]$DesiredValue.allowedToCreateAgentIdentityBlueprints } } | ConvertTo-Json -Depth 5
 
     try {
-        Invoke-MgGraphRequest -Method PATCH -Uri $script:AgentBlueprintPolicyUri -Body $body -ContentType 'application/json' -ErrorAction Stop
+        Invoke-MgGraphRequest -Method PATCH -Uri $script:AgentBlueprintPolicyUri -Body $body -ContentType 'application/json' -ErrorAction Stop | Out-Null
     }
     catch {
         $statusCode = $null
