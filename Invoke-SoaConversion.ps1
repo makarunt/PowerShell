@@ -1061,13 +1061,19 @@ function Invoke-SoaInventory {
     }
 
     if (-not $fromCsv) {
-        $notEligible = @($rows | Where-Object { -not $_.EligibleForConvert })
-        if ($notEligible.Count -gt 0) {
-            Write-Log "$($notEligible.Count) listed object(s) are not eligible (protected, already converted or unreadable) and were left out." -Level Warn
-            $keep = [System.Collections.Generic.HashSet[string]]::new([string[]]@($rows | Where-Object EligibleForConvert | ForEach-Object ObjectId))
-            $rows = [System.Collections.Generic.List[object]]@($rows | Where-Object EligibleForConvert)
+        # Keep eligible objects and objects that could not be read (Error), so read failures stay visible.
+        $leftOut = @($rows | Where-Object { -not $_.EligibleForConvert -and "$($_.Note)" -notlike 'Error:*' })
+        if ($leftOut.Count -gt 0) {
+            Write-Log "$($leftOut.Count) listed object(s) are not eligible and were left out:" -Level Warn
+            foreach ($group in ($leftOut | Group-Object { ($_.Note -split ':')[0] })) { Write-Log "  $($group.Count) x $($group.Name)" -Level Warn }
+            $keep = [System.Collections.Generic.HashSet[string]]::new([string[]]@($rows | Where-Object { $_ -notin $leftOut } | ForEach-Object ObjectId))
+            $rows = [System.Collections.Generic.List[object]]@($rows | Where-Object { $keep.Contains($_.ObjectId) })
             $memberships = [System.Collections.Generic.List[object]]@($memberships | Where-Object { $keep.Contains($_.GroupObjectId) })
         }
+    }
+    $errors = @($rows | Where-Object { "$($_.Note)" -like 'Error:*' })
+    if ($errors.Count -gt 0) {
+        Write-Log "$($errors.Count) object(s) could not be read completely (Note starts with 'Error:'); they are never changed." -Level Error
     }
     return @{ Rows = $rows; Memberships = $memberships }
 }
