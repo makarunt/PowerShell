@@ -68,7 +68,7 @@ istom tenantu.
 | Kategorija | Entra / EXO uloga (minimalno) | Graph delegated scope koji skripta traži |
 |---|---|---|
 | ExchangeAttributes | Exchange Administrator (Microsoft preporučuje), ili Hybrid Identity Administrator, ili Global Administrator | – |
-| User | **Hybrid Administrator** | `User.Read.All`, `User-OnPremisesSyncBehavior.ReadWrite.All` |
+| User | **Hybrid Administrator** | `User.Read.All`, `User-OnPremisesSyncBehavior.ReadWrite.All`, `RoleManagement.Read.Directory` (čitanje članova uloge *Directory Synchronization Accounts*, vidi *Zaštićeni sistemski objekti*) |
 | Group | **Hybrid Administrator** (+ EXO čitanje za mail-enabled grupe, npr. View-Only Recipients) | `Group.Read.All`, `GroupMember.Read.All`, `User.Read.All`, `Group-OnPremisesSyncBehavior.ReadWrite.All` |
 | Contact | **Hybrid Administrator** (+ EXO čitanje kontakata) | `OrgContact.Read.All`, `Contacts-OnPremisesSyncBehavior.ReadWrite.All` |
 
@@ -96,6 +96,24 @@ istom tenantu.
 
 Za Group, `-GroupType` se primjenjuje u svim akcijama: grupa drugog tipa u CSV-u preskače se s napomenom
 `GroupTypeNotSelected`. Microsoft 365 (Unified) grupe nikad nisu prihvatljive.
+
+## Zaštićeni sistemski objekti
+
+Skripta neke objekte nikad ne mijenja, ni Convertom ni Rollbackom. Takav objekt dobije u stupcu `Note` vrijednost
+`ProtectedSystemObject: <razlog>`. Inventory bez CSV-a ih izostavlja i javi koliko ih je pronašao; s CSV-om su
+vidljivi s razlogom, a Convert i Rollback ih preskaču.
+
+| Pravilo | Što hvata |
+|---|---|
+| Članovi Entra uloge **Directory Synchronization Accounts** (template `d29b2b05-8046-44ba-8758-1e26182fcf32`) | Entra Connect / Cloud Sync service račun, bez obzira na ime. Samo kategorija User. Ako se članovi uloge ne mogu pročitati, skripta staje (fail closed). |
+| Uzorci imena (UPN, alias/mailNickname, display name, on-prem SAM/UPN) | `Sync_*`, `ADToAADSyncServiceAccount*`, *On-Premises Directory Synchronization Service Account*, `MSOL_*`, `AAD_*`, Administrator, Guest, krbtgt, DefaultAccount, `SUPPORT_388945a0*`, Exchange sistemski mailboxovi (`HealthMailbox*`, `SystemMailbox{*`, `DiscoverySearchMailbox*`, `FederatedEmail.*`, `Migration.8f3e7716*`, `SM_*`, `CAS_{*`) |
+| Ugrađene grupe (točan naziv) | Exchange RBAC grupe (*Organization Management*, *Recipient Management*, *Exchange Servers*, *Exchange Trusted Subsystem*, …), *DnsAdmins*, *DnsUpdateProxy* |
+| On-prem SID s well-known RID-om (< 1000) | Ugrađeni korisnici i grupe (Administrator 500, krbtgt 502, Domain Admins 512, …), čak i ako su preimenovani. |
+
+Uloga *Directory Synchronization Accounts* je Microsoftov preporučeni način pronalaženja sync računa
+(*Entra Connect: Accounts and permissions*). Pogrešno prepoznavanje samo preskače objekt, pa su liste namjerno
+šire. Liste su na vrhu skripte (`$ProtectedNamePatterns`, `$ProtectedGroupNames`) i mogu se dopuniti ako
+pronađeš još neki sistemski račun.
 
 ## Preporučeni redoslijed rada
 

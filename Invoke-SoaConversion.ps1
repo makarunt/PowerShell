@@ -179,7 +179,7 @@ $script:ExoConnected  = $false
 $GraphSegment = @{ User = 'users'; Group = 'groups'; Contact = 'contacts' }
 
 $GraphScopes = @{
-    User    = @('User.Read.All', 'User-OnPremisesSyncBehavior.ReadWrite.All')
+    User    = @('User.Read.All', 'User-OnPremisesSyncBehavior.ReadWrite.All', 'RoleManagement.Read.Directory')
     Group   = @('Group.Read.All', 'GroupMember.Read.All', 'User.Read.All', 'Group-OnPremisesSyncBehavior.ReadWrite.All')
     Contact = @('OrgContact.Read.All', 'Contacts-OnPremisesSyncBehavior.ReadWrite.All')
 }
@@ -234,6 +234,35 @@ $ExoGroupProperties = @(
 )
 
 $ExoContactProperties = @('ExternalEmailAddress', 'PrimarySmtpAddress', 'Alias', 'HiddenFromAddressListsEnabled', 'EmailAddresses')
+
+# Protected system objects: never converted or rolled back, skipped with Note 'ProtectedSystemObject: ...'.
+# A false match only skips an object, so the lists err on the side of caution. Edit them if needed.
+# 1) Members of the Entra role 'Directory Synchronization Accounts' (Entra Connect / Cloud Sync service
+#    accounts), whatever their name. Only relevant for Category User.
+$DirSyncRoleTemplateId = 'd29b2b05-8046-44ba-8758-1e26182fcf32'
+# 2) Wildcard patterns, matched case-insensitively against UPN, alias/mailNickname, display name and
+#    on-premises SAM account name / UPN.
+$ProtectedNamePatterns = @(
+    'Sync_*'                                                  # Entra Connect sync account (Sync_<server>_<id>@...)
+    'ADToAADSyncServiceAccount*'                              # Cloud Sync service account
+    'On-Premises Directory Synchronization Service Account'   # display name of both
+    'MSOL_*', 'AAD_*'                                         # Entra Connect AD DS connector accounts
+    'Administrator', 'Guest', 'krbtgt', 'DefaultAccount', 'SUPPORT_388945a0*'
+    'HealthMailbox*', 'SystemMailbox{*', 'DiscoverySearchMailbox*', 'FederatedEmail.*', 'Migration.8f3e7716*'
+    'CAS_{*', 'SM_*', 'Exchange_Online-ApplicationAccount*'   # Exchange system mailboxes and accounts
+)
+# 3) Built-in Exchange and AD groups (matched exactly against group display name / SAM account name).
+$ProtectedGroupNames = @(
+    'Organization Management', 'View-Only Organization Management', 'Recipient Management', 'Server Management',
+    'Discovery Management', 'Records Management', 'Compliance Management', 'Hygiene Management', 'Help Desk',
+    'Public Folder Management', 'UM Management', 'Delegated Setup', 'Security Administrator', 'Security Reader',
+    'Exchange Servers', 'Exchange Trusted Subsystem', 'Exchange Windows Permissions', 'ExchangeLegacyInterop',
+    'Exchange Install Domain Servers', 'Managed Availability Servers', 'DnsAdmins', 'DnsUpdateProxy',
+    'WinRMRemoteWMIUsers__'
+)
+# 4) Any user or group whose on-premises SID ends in a well-known RID (< 1000), e.g. Administrator (500),
+#    krbtgt (502), Domain Admins (512).
+$script:ProtectedObjectIds = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
 
 #endregion
 
@@ -882,6 +911,69 @@ function New-ContactInventoryRow {
 
 #endregion
 
+#region Protected system objects
+
+function Initialize-ProtectedObjects {
+    # Loads the members of 'Directory Synchronization Accounts'. Fails closed: if the role members cannot be
+    # read, the run stops instead of risking a change to a sync service account.
+    $uri = "$GraphRoot/v1.0/directoryRoles(roleTemplateId='$DirSyncRoleTemplateId')/members" + '?$select=id,userPrincipalName,displayName'
+    try {
+        $members = @(Get-GraphCollection -Uri $uri)
+    }
+    catch {
+        if ((Get-HttpStatusCode -ErrorRecord $_) -eq 404) {
+            $members = @()   # role not activated in the tenant: no members
+        }
+        else {
+            throw "Could not read members of the 'Directory Synchronization Accounts' role, so sync service accounts cannot be protected: $(Get-ErrorText -ErrorRecord $_)"
+        }
+    }
+    foreach ($member in $members) {
+        $script:ProtectedObjectIds[$member.id] = "member of 'Directory Synchronization Accounts' role"
+        Write-Log "Protected sync service account: $($member.userPrincipalName) ($($member.id))"
+    }
+}
+
+function Get-ProtectedReason {
+    param([Parameter(Mandatory)][object]$Row)
+    $properties = $Row.PSObject.Properties
+    if ($script:ProtectedObjectIds.ContainsKey("$($Row.ObjectId)")) { return $script:ProtectedObjectIds["$($Row.ObjectId)"] }
+
+    foreach ($field in 'userPrincipalName', 'mailNickname', 'Alias', 'displayName', 'onPremisesSamAccountName', 'onPremisesUserPrincipalName') {
+        if (-not $properties[$field]) { continue }
+        $value = "$($properties[$field].Value)"
+        if (-not $value) { continue }
+        foreach ($pattern in $ProtectedNamePatterns) {
+            if ($value -like $pattern) { return "$field '$value' matches system account pattern '$pattern'" }
+        }
+        if ($Category -eq 'Group' -and $field -in 'displayName', 'onPremisesSamAccountName' -and $value -in $ProtectedGroupNames) {
+            return "built-in group '$value'"
+        }
+    }
+
+    if ($properties['onPremisesSecurityIdentifier']) {
+        $sid = "$($properties['onPremisesSecurityIdentifier'].Value)"
+        if ($sid -match '-(\d+)$' -and [long]$Matches[1] -lt 1000) { return "well-known on-premises SID $sid" }
+    }
+    return $null
+}
+
+function Set-RowProtection {
+    param([Parameter(Mandatory)][object]$Row)
+    $reason = Get-ProtectedReason -Row $Row
+    if ($reason) {
+        $Row.EligibleForConvert = $false
+        $Row.Note = "ProtectedSystemObject: $reason"
+    }
+}
+
+function Test-ProtectedRow {
+    param([Parameter(Mandatory)][object]$Row)
+    return "$($Row.Note)" -like 'ProtectedSystemObject:*'
+}
+
+#endregion
+
 #region Inventory, state, change
 
 function New-InventoryRow {
@@ -953,13 +1045,19 @@ function Invoke-SoaInventory {
             'Group'   { $rows.Add((New-GroupInventoryRow -ObjectId $item.Id -Group $item.Object -Memberships $memberships)) }
             'Contact' { $rows.Add((New-ContactInventoryRow -ObjectId $item.Id -Contact $item.Object)) }
         }
+        Set-RowProtection -Row $rows[$rows.Count - 1]
     }
     Write-Progress -Activity "Inventory $Category" -Completed
+
+    $protectedCount = @($rows | Where-Object { Test-ProtectedRow -Row $_ }).Count
+    if ($protectedCount -gt 0) {
+        Write-Log "$protectedCount protected system object(s) found; they are never changed by this script (see Note column)." -Level Warn
+    }
 
     if (-not $fromCsv) {
         $notEligible = @($rows | Where-Object { -not $_.EligibleForConvert })
         if ($notEligible.Count -gt 0) {
-            Write-Log "$($notEligible.Count) listed object(s) turned out not to be eligible and were left out." -Level Warn
+            Write-Log "$($notEligible.Count) listed object(s) are not eligible (protected, already converted or unreadable) and were left out." -Level Warn
             $keep = [System.Collections.Generic.HashSet[string]]::new([string[]]@($rows | Where-Object EligibleForConvert | ForEach-Object ObjectId))
             $rows = [System.Collections.Generic.List[object]]@($rows | Where-Object EligibleForConvert)
             $memberships = [System.Collections.Generic.List[object]]@($memberships | Where-Object { $keep.Contains($_.GroupObjectId) })
@@ -1135,6 +1233,9 @@ function Invoke-SoaChange {
         if ($Action -eq 'Convert') {
             if (-not $row.EligibleForConvert) { $skipReason = $row.Note }
         }
+        elseif (Test-ProtectedRow -Row $row) {
+            $skipReason = $row.Note
+        }
         else {
             switch ($row.CurrentSoaState) {
                 'CloudManaged' {
@@ -1269,6 +1370,7 @@ try {
     # Exchange Online first: loading it after Microsoft.Graph can cause MSAL assembly conflicts.
     $exoConnection = if ($needExo) { Connect-SoaExchange }
     $graphContext = if ($needGraph) { Connect-SoaGraph -Scopes $GraphScopes[$Category] }
+    if ($Category -eq 'User' -and $Action -ne 'Verify') { Initialize-ProtectedObjects }
     if ($exoConnection -and $graphContext -and "$($exoConnection.TenantID)" -ne "$($graphContext.TenantId)") {
         throw "Exchange Online tenant ($($exoConnection.TenantID)) and Microsoft Graph tenant ($($graphContext.TenantId)) differ."
     }
