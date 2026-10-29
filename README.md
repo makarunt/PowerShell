@@ -26,8 +26,8 @@ skripta staje).
 | PowerShell | **7.2 ili noviji**. Windows PowerShell 5.1 nije podržan i ne treba ga. |
 | `ExchangeOnlineManagement` | 3.2.0+ (potreban za `Get-ConnectionInformation`; `Set-Mailbox` mora imati `-IsExchangeCloudManaged`, skripta to provjerava). |
 | `Microsoft.Graph.Authentication` | 2.x. Svi Graph pozivi idu kroz `Invoke-MgGraphRequest`. |
-| Entra Connect Sync | Microsoft traži min. 2.5.76.0 za User/Group SOA i **2.5.79.0 za Contact SOA**. Vaša verzija 2.5.190.0+ zadovoljava oboje. |
-| Cloud Sync agent | Min. 1.1.1370.0 (ako se koristi). |
+| Entra Connect Sync | Za ExchangeAttributes **2.5.190.0+** (starije verzije pokušavaju gurnuti Exchange atribute već prebačenih mailboxova u Entra ID i ne uspijevaju). Za User/Group SOA min. 2.5.76.0, za **Contact SOA 2.5.79.0**. Provjera: `(Get-ADSyncGlobalSettings).Parameters['Microsoft.Synchronize.ServerConfigurationVersion']` |
+| Cloud Sync agent | Min. 1.1.1370.0 za User/Group SOA; **1.1.1107.0+** za Exchange attribute writeback (konfiguracija *EXO to AD attribute sync*). Cloud Sync radi uz Connect Sync, ne umjesto njega. |
 | Prijava | Interaktivna (delegated). Za `IsExchangeCloudManaged` app-only/certifikat nije podržan. |
 
 ```powershell
@@ -50,7 +50,7 @@ istom tenantu.
 
 | Kategorija | Entra / EXO uloga (minimalno) | Graph delegated scope koji skripta traži |
 |---|---|---|
-| ExchangeAttributes | Exchange Administrator | – |
+| ExchangeAttributes | Exchange Administrator (Microsoft preporučuje), ili Hybrid Identity Administrator, ili Global Administrator | – |
 | User | **Hybrid Administrator** | `User.Read.All`, `User-OnPremisesSyncBehavior.ReadWrite.All` |
 | Group | **Hybrid Administrator** (+ EXO čitanje za mail-enabled grupe, npr. View-Only Recipients) | `Group.Read.All`, `GroupMember.Read.All`, `User.Read.All`, `Group-OnPremisesSyncBehavior.ReadWrite.All` |
 | Contact | **Hybrid Administrator** (+ EXO čitanje kontakata) | `OrgContact.Read.All`, `Contacts-OnPremisesSyncBehavior.ReadWrite.All` |
@@ -166,7 +166,12 @@ Postojeće datoteke se nikad ne prepisuju.
 
 Backup stupci po kategoriji:
 - **ExchangeAttributes**: svi traženi atributi, `UserCertificate`/`UserSMimeCertificate` samo kao
-  `HasUserCertificate`/`HasUserSMimeCertificate` (True/False), te `Guid` i `ExchangeGuid`. On-prem DN, SAM i
+  `HasUserCertificate`/`HasUserSMimeCertificate` (True/False), te `Guid` i `ExchangeGuid`. Dodani su i ostali
+  atributi koje Microsoftova tablica navodi kao uređive u EXO nakon prebacivanja (ArchiveName, Audit*,
+  SingleItemRecoveryEnabled, LitigationHoldDate/Owner, retention hold datumi, RetentionComment/Url,
+  MailTipTranslations, moderacija, Resource*, ImmutableId) te `AssistantName` iz `Get-User`. **Nisu u backupu:**
+  mailbox permissions (`Get-MailboxPermission`) i junk e-mail postavke; izvezite ih zasebno ako ih mijenjate u
+  cloudu. On-prem DN, SAM i
   ImmutableId nisu u EXO, a skripta za ovu kategoriju ne spaja Graph. Objekt u AD-u pronađite po UPN-u ili
   PrimarySmtpAddress.
 - **User**: svi traženi atributi, `managerUserPrincipalName`, `extensionAttribute1-15`, svi `onPremises*`.
@@ -195,8 +200,19 @@ jednom stupcu. Preporuke:
 
 ## Upozorenja koja skripta prikazuje
 
-**ExchangeAttributes Convert**: od zadnje on-prem promjene (`Set-RemoteMailbox`) ili migracije mailboxa mora
-proći sync ciklus + 24 h. Skripta to ne može provjeriti.
+**ExchangeAttributes Convert** (prema Microsoftu):
+- Od zadnje on-prem promjene (`Set-RemoteMailbox`) ili premještanja mailboxa mora proći puni sync ciklus + 24 h
+  (npr. sync 6 h = ukupno 30 h).
+- Nakon premještanja mailboxa: prvo potvrdite da je premještanje gotovo i da je on-prem objekt RemoteMailbox.
+  Zatim pričekajte da se atributi nakon premještanja sinkroniziraju u Entra ID, pa tek onda počnite brojati 24 h.
+  Prerana konverzija može dovesti do toga da writeback zastarjelim cloud recipient-type vrijednostima prepiše
+  ispravne remote-mailbox vrijednosti u AD-u.
+- Skripta to ne može provjeriti.
+- Writeback u AD (Cloud Sync) postoji samo za CustomAttribute1-15, ExtensionCustomAttribute1-5, mail
+  (WindowsEmailAddress), proxyAddresses i recipient type. Ostalo (npr. HiddenFromAddressListsEnabled,
+  forwarding, moderacija) ostaje samo u cloudu, a nakon rollbacka se vraća na vrijednost iz AD-a.
+- Prije vraćanja mailboxa on-prem (offboarding) treba prvo napraviti Rollback (`IsExchangeCloudManaged = $false`),
+  inače sinkronizacija pri offboardingu puca.
 
 **User Convert**:
 - Korisnik postaje cloud authoritative i promjene iz AD-a se više ne primjenjuju (Connect Sync bilježi event 6956).
@@ -227,17 +243,22 @@ ukloniti cloud reference (članstva u konvertiranim grupama, access packages).
 
 ## Razlike između zahtjeva i Microsoftove dokumentacije
 
-Dokumentacija je pročitana iz izvornih GitHub repozitorija (`MicrosoftDocs/entra-docs`,
-`microsoftgraph/microsoft-graph-docs-contrib`, `MicrosoftDocs/office-docs-powershell`), jer learn.microsoft.com
-nije bio dostupan iz okruženja u kojem je skripta napisana. Stranica
-*enable-exchange-attributes-cloud-management* nije javno dostupna u izvornom obliku, pa detalji za
-ExchangeAttributes nisu provjereni (vidi zadnju točku).
+Provjereno na learn.microsoft.com 29. 10. 2026:
+- *Cloud-based management of Exchange attributes for Remote Mailboxes in hybrid environments* (ažurirano
+  2026-09-28),
+- *Configure user SOA* (2026-04-15), *Configure Group SOA* (2025-11-19), *Transfer user SOA* (2026-09-24),
+- Graph *Get/Update onPremisesSyncBehavior* i *onPremisesSyncBehavior resource type*,
+- *Decommission the last Exchange Server after transferring SOA to cloud*.
+
+Microsoftov blog na techcommunity.microsoft.com nije bio dostupan, ali službena Exchange stranica pokriva sve
+što je bilo potrebno.
 
 1. **v1.0 ili beta.** Entra how-to članci (User/Group/Contact SOA) koriste `https://graph.microsoft.com/v1.0/...`.
-   Graph API referenca dokumentira `onPremisesSyncBehavior` (get/update/resource) **samo pod beta**.
+   Graph API referenca dokumentira `onPremisesSyncBehavior` (get/update/resource) **samo pod beta**; i kad se na
+   learn.microsoft.com odabere v1.0, stranica prikazuje beta sadržaj.
    Skripta koristi v1.0, a ako v1.0 vrati *"Resource not found for the segment"*, automatski prelazi na beta za
    SOA endpoint. U logu se ispisuje koja je verzija korištena.
-2. **Stanje nakon konverzije.** `onPremisesSyncEnabled` se nakon konverzije **ne** ostaje `true`, nego postaje
+2. **Stanje nakon konverzije.** `onPremisesSyncEnabled` nakon konverzije **ne** ostaje `true`, nego postaje
    **`null`**. Microsoftova tablica:
 
    | Korak | isCloudManaged | onPremisesSyncEnabled |
@@ -263,10 +284,23 @@ ExchangeAttributes nisu provjereni (vidi zadnju točku).
    grupama nisu podržani `extensionAttribute1-15`. DL i MESG se nakon konverzije ne mogu uređivati kroz Graph ni
    Entra admin center, nego samo u EXO.
 7. **Verzije Connect Synca:** minimalno 2.5.76.0 (User/Group) i 2.5.79.0 (Contact).
-8. **Nije provjereno iz dokumentacije (preuzeto iz zahtjeva):** pravilo sync ciklus + 24 h, to da
-   `-IsExchangeCloudManaged` mora biti sam u naredbi (cmdlet referenca potvrđuje da ima vlastiti parameter set),
-   da app-only nije podržan za `IsExchangeCloudManaged` te da User SOA briše `IsExchangeCloudManaged`.
-   Provjerite ih na learn.microsoft.com prije produkcije.
+8. **ExchangeAttributes: zahtjev je potvrđen.** Dokumentacija potvrđuje:
+   - pravilo sync ciklus + 24 h (uz dodatna pravila za premještanje mailboxa, vidi *Upozorenja*),
+   - da se `-IsExchangeCloudManaged` *"should not be used together with any other parameters"*,
+   - da certificate-based app-only nije podržan (*"an app-only session doesn't provide the delegated user
+     authorization required to update the IsExchangeCloudManaged property in Microsoft Entra ID"*),
+   - da User SOA *"clears the user's IsExchangeCloudManaged state"*.
+
+   Dodatno iz dokumentacije:
+   - zastavica vrijedi samo za mailboxove korisnika s `IsDirSynced = true`; za mail-enabled grupe i mail
+     kontakte koristi se Group/Contact SOA,
+   - nakon User SOA `IsDirSynced` postaje `False` (skripta takav mailbox prikazuje kao `NotSynced`),
+   - writeback u AD radi samo za dio atributa (vidi *Upozorenja*).
+
+   Microsoftovi primjeri koriste `-Identity <User>` / `Alias`. Dokumentacija ne navodi izričito da `-Identity`
+   prihvaća `ExternalDirectoryObjectId`. Skripta ga koristi kako je traženo, a automatski Verify potvrđuje
+   promjenu. Ako EXO ne razriješi ObjectId, objekt završava kao `Failed` i ništa se ne mijenja; to se vidi već
+   na pilotu s `-MaxObjects 1`.
 
 ## Testiranje
 

@@ -209,7 +209,12 @@ $MailboxProperties = @(
     'GrantSendOnBehalfTo', 'AcceptMessagesOnlyFrom', 'AcceptMessagesOnlyFromDLMembers',
     'AcceptMessagesOnlyFromSendersOrMembers', 'RejectMessagesFrom', 'RejectMessagesFromDLMembers',
     'RejectMessagesFromSendersOrMembers', 'ModerationEnabled', 'ModeratedBy', 'RequireSenderAuthenticationEnabled',
-    'LitigationHoldEnabled', 'RetentionHoldEnabled', 'ArchiveStatus', 'MailTip', 'Guid', 'ExchangeGuid'
+    'LitigationHoldEnabled', 'RetentionHoldEnabled', 'ArchiveStatus', 'MailTip', 'Guid', 'ExchangeGuid',
+    # Further attributes that Microsoft lists as editable in EXO after the Exchange-attribute SOA transfer
+    'ArchiveGuid', 'ArchiveName', 'AuditEnabled', 'AuditLogAgeLimit', 'AuditAdmin', 'AuditDelegate', 'AuditOwner',
+    'SingleItemRecoveryEnabled', 'LitigationHoldDate', 'LitigationHoldOwner', 'StartDateForRetentionHold',
+    'EndDateForRetentionHold', 'RetentionComment', 'RetentionUrl', 'MailTipTranslations', 'SendModerationNotifications',
+    'BypassModerationFromSendersOrMembers', 'ResourceCapacity', 'ResourceCustom', 'ImmutableId'
 )
 
 $ExoGroupProperties = @(
@@ -584,7 +589,7 @@ function Get-MailboxSoaStateName {
 
 function New-MailboxInventoryRow {
     param([Parameter(Mandatory)][string]$ObjectId, [AllowNull()][object]$Mailbox, [string]$LookupError)
-    $columns = $MailboxProperties + @('HasUserCertificate', 'HasUserSMimeCertificate')
+    $columns = $MailboxProperties + @('HasUserCertificate', 'HasUserSMimeCertificate', 'AssistantName')
     $row = New-InventoryRow -ObjectId $ObjectId -Columns $columns
     if ($LookupError) { $row.Note = "Error: $LookupError"; return [pscustomobject]$row }
 
@@ -593,6 +598,12 @@ function New-MailboxInventoryRow {
         foreach ($name in $MailboxProperties) { $row[$name] = ConvertTo-CellValue $Mailbox.$name }
         $row.HasUserCertificate = (@($Mailbox.UserCertificate).Where({ $_ }).Count -gt 0)
         $row.HasUserSMimeCertificate = (@($Mailbox.UserSMimeCertificate).Where({ $_ }).Count -gt 0)
+        # AssistantName (msExchAssistantName) is set with Set-User, so it is read with Get-User.
+        try {
+            $user = Get-User -Identity "$($Mailbox.Guid)" -ErrorAction Stop -WarningAction SilentlyContinue
+            $row.AssistantName = ConvertTo-CellValue $user.AssistantName
+        }
+        catch { $row.Note = "Get-User failed, AssistantName not backed up: $(Get-ErrorText -ErrorRecord $_)" }
     }
     Set-RowEligibility -Row $row
     return [pscustomobject]$row
@@ -1005,15 +1016,18 @@ function Show-ChangeWarning {
         switch ($Category) {
             'ExchangeAttributes' {
                 Show-WarningBlock -Title 'Exchange attributes SOA conversion' -Lines @(
-                    'At least one Entra Connect sync cycle PLUS 24 hours must have passed since the last on-premises change (Set-RemoteMailbox) or mailbox migration for EVERY mailbox in the list.',
-                    'This script cannot verify that. Do not continue if you are not sure.',
-                    'After conversion, Exchange attributes are managed in Exchange Online; on-premises changes to them are no longer applied.'
+                    'After the last on-premises change (Set-RemoteMailbox) or mailbox move, wait one full sync cycle PLUS 24 hours for EVERY mailbox in the list (e.g. 6 h sync = 30 h in total).',
+                    'After a mailbox move: first confirm the move completed and the on-premises recipient is a RemoteMailbox, let the post-move attributes sync to Entra ID, and only then start the 24-hour wait.',
+                    'Converting too early can let stale cloud recipient-type values overwrite the correct remote-mailbox values in AD when Exchange attribute writeback runs.',
+                    'This script cannot verify any of that. Do not continue if you are not sure.',
+                    'After conversion, Exchange attributes stop updating from on-premises and are managed in Exchange Online. Identity attributes (name, UPN, department, ...) stay managed in AD.',
+                    'Cloud Sync writes back only some attributes to AD (CustomAttribute1-15, ExtensionCustomAttribute1-5, mail, proxyAddresses, recipient type). Others, e.g. HiddenFromAddressListsEnabled or forwarding, stay cloud-only.'
                 )
             }
             'User' {
                 Show-WarningBlock -Title 'USER SOA conversion - the whole user object becomes cloud authoritative' -Lines @(
                     'Changes made in on-premises AD are no longer applied to these users (Connect Sync logs event 6956 instead).',
-                    'User SOA conversion clears the IsExchangeCloudManaged state of the mailbox.',
+                    'User SOA conversion clears the IsExchangeCloudManaged state of the mailbox; the mailbox user is no longer dir-synced (IsDirSynced = False).',
                     'Sign-in: users federated through AD FS are NOT supported. Users must not depend on password-based on-premises authentication (LDAP bind, Kerberos with password).',
                     'Plan cloud authentication for these users (for example Windows Hello for Business with Cloud Kerberos Trust or FIDO2) and test sign-in with a pilot user first.',
                     'Do not convert users whose mailboxes are still on Exchange Server; all mailboxes must be in Exchange Online.',
@@ -1042,6 +1056,10 @@ function Show-ChangeWarning {
             "  $BackupPath",
             'The rollback is complete only after the next (scheduled or forced) Connect Sync run.'
         )
+        if ($Category -eq 'ExchangeAttributes') {
+            $lines += 'Attributes that Cloud Sync does not write back (e.g. HiddenFromAddressListsEnabled, forwarding, moderation) revert to the AD values.'
+            $lines += 'Mailbox permissions and junk e-mail settings are not in the backup CSV; export them separately if they were changed in the cloud.'
+        }
         if ($Category -ne 'ExchangeAttributes') {
             $lines += 'Remove cloud references first: cloud-only members of converted groups, access package assignments.'
         }
