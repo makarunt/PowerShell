@@ -30,9 +30,26 @@ skripta staje).
 | Cloud Sync agent | Min. 1.1.1370.0 za User/Group SOA; **1.1.1107.0+** za Exchange attribute writeback (konfiguracija *EXO to AD attribute sync*). Cloud Sync radi uz Connect Sync, ne umjesto njega. |
 | Prijava | Interaktivna (delegated). Za `IsExchangeCloudManaged` app-only/certifikat nije podržan. |
 
+Provjera pri pokretanju:
+- **PowerShell:** ako je verzija starija od 7.2 (npr. Windows PowerShell 5.1), skripta ispiše potrebnu verziju i
+  kako instalirati PowerShell 7 (`winget install --id Microsoft.PowerShell --source winget`), te završi s exit
+  kodom 3 bez ikakve promjene i bez izlazne mape. Skriptu treba pokretati iz `pwsh`, ne iz `powershell`.
+- **Moduli:** provjeravaju se samo moduli potrebni za odabranu kategoriju. Ako modul nedostaje ili je prestar,
+  skripta pita `Install '<modul>' from the PowerShell Gallery for the current user now? [Y/N]`.
+  - Na `Y` instalira modul (`Install-Module -Scope CurrentUser -Repository PSGallery -Force`, uz starije
+    verzije ako postoje) i nastavlja.
+  - Na bilo koji drugi odgovor staje i ispiše naredbu za ručnu instalaciju.
+  - Ako je u istoj sesiji već učitana prestara verzija modula, skripta traži novu PowerShell sesiju.
+  - Instalacija se radi i kad je skripta pokrenuta s `-WhatIf`, jer je to lokalna promjena koju si upravo
+    potvrdio.
+
+Ručna instalacija, ako je radije želiš unaprijed:
+
 ```powershell
-Install-Module ExchangeOnlineManagement -Scope CurrentUser
-Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
+Install-Module ExchangeOnlineManagement -MinimumVersion 3.2.0 -Scope CurrentUser
+```
+```powershell
+Install-Module Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -Scope CurrentUser
 ```
 
 Skripta se spaja samo na servise koji su kategoriji potrebni, i to prvo na EXO, a zatim na Graph (redoslijed

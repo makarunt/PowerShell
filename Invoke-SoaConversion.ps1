@@ -119,9 +119,6 @@
     Windows PowerShell 5.1 is not supported.
     See README.md for roles, permissions and the recommended order of work.
 #>
-
-#Requires -Version 7.2
-
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Interactive console tool; output is captured by Start-Transcript.')]
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
 param(
@@ -150,11 +147,24 @@ param(
     [string]$ExpectedState = 'CloudManaged'
 )
 
+# Checked here instead of with #Requires so that Windows PowerShell 5.1 gets a clear message.
+# PowerShell parses the whole file before running it, so the whole file must stay parseable by 5.1
+# (no ternary ?:, ??, ?., && or || operators) and ASCII-only (5.1 reads BOM-less files as ANSI).
+$MinimumPowerShellVersion = [version]'7.2'
+if ($PSVersionTable.PSVersion -lt $MinimumPowerShellVersion) {
+    Write-Host "This script requires PowerShell $MinimumPowerShellVersion or newer (PowerShell 7)." -ForegroundColor Red
+    Write-Host "Current version: $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))." -ForegroundColor Red
+    Write-Host 'Install PowerShell 7:  winget install --id Microsoft.PowerShell --source winget' -ForegroundColor Yellow
+    Write-Host '                  or:  https://aka.ms/powershell-release?tag=stable' -ForegroundColor Yellow
+    Write-Host 'Then start "pwsh" (not "powershell") and run the script again.' -ForegroundColor Yellow
+    exit 3
+}
+
 #region Settings
 
 $ErrorActionPreference = 'Stop'
 
-$CsvEncoding         = 'Unicode'   # UTF-16 LE with BOM; keeps č, ć, ž, š, đ intact
+$CsvEncoding         = 'Unicode'   # UTF-16 LE with BOM; keeps Croatian diacritics intact
 $MultiValueSeparator = '|'
 $VerifyAttempts      = 5
 $VerifyDelaySeconds  = 20
@@ -497,14 +507,42 @@ function Test-Prerequisites {
     if ($NeedExo) { $modules += 'ExchangeOnlineManagement' }
     if ($NeedGraph) { $modules += 'Microsoft.Graph.Authentication' }
     foreach ($name in $modules) {
-        $available = Get-Module -ListAvailable -Name $name | Sort-Object Version -Descending | Select-Object -First 1
-        if (-not $available) { throw "Module '$name' is not installed. Install-Module $name -Scope CurrentUser" }
-        if ($available.Version -lt $RequiredModules[$name]) {
-            throw "Module '$name' $($available.Version) is too old; $($RequiredModules[$name]) or newer is required."
+        $minimum = $RequiredModules[$name]
+        $loaded = Get-Module -Name $name | Sort-Object Version -Descending | Select-Object -First 1
+        if ($loaded -and $loaded.Version -lt $minimum) {
+            throw "Module '$name' $($loaded.Version) is already loaded in this session, but $minimum or newer is required. Close this PowerShell window and run the script in a new session."
         }
-        Import-Module -Name $name -MinimumVersion $RequiredModules[$name] -ErrorAction Stop
+        $available = Get-Module -ListAvailable -Name $name | Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $available -or $available.Version -lt $minimum) {
+            Install-RequiredModule -Name $name -MinimumVersion $minimum -InstalledVersion $available.Version
+            $available = Get-Module -ListAvailable -Name $name | Sort-Object Version -Descending | Select-Object -First 1
+            if (-not $available -or $available.Version -lt $minimum) {
+                throw "Module '$name' $minimum or newer is still not available after installation. Start a new PowerShell session and try again."
+            }
+        }
+        Import-Module -Name $name -MinimumVersion $minimum -ErrorAction Stop
         Write-Log "Module $name $($available.Version) loaded."
     }
+}
+
+function Install-RequiredModule {
+    # Offers to install (or update) a required module from the PowerShell Gallery for the current user.
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][version]$MinimumVersion, [version]$InstalledVersion)
+    $manual = "Install-Module -Name $Name -MinimumVersion $MinimumVersion -Scope CurrentUser -Repository PSGallery"
+    $problem = if ($InstalledVersion) { "version $InstalledVersion is installed, $MinimumVersion or newer is required" } else { 'it is not installed' }
+    Write-Log "Module '$Name' is needed, but $problem." -Level Warn
+    if (-not (Get-Command -Name Install-Module -ErrorAction SilentlyContinue)) {
+        throw "Install-Module (PowerShellGet) is not available. Install the module manually: $manual"
+    }
+    $answer = Read-Host -Prompt "Install '$Name' from the PowerShell Gallery for the current user now? [Y/N]"
+    if ($answer -notmatch '^\s*(y|yes)\s*$') {
+        throw "Module '$Name' is required. Install it and run the script again: $manual"
+    }
+    Write-Log "Installing $Name (minimum $MinimumVersion) for the current user..."
+    # -Force skips the 'untrusted repository' prompt (the operator just confirmed) and allows a side-by-side
+    # install next to an older version. WhatIf/Confirm of the script do not apply to this local install.
+    Install-Module -Name $Name -MinimumVersion $MinimumVersion -Scope CurrentUser -Repository PSGallery -Force -WhatIf:$false -Confirm:$false -ErrorAction Stop
+    Write-Log "Module $Name installed." -Level Success
 }
 
 function Connect-SoaExchange {
