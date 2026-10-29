@@ -160,6 +160,12 @@ if ($PSVersionTable.PSVersion -lt $MinimumPowerShellVersion) {
     exit 3
 }
 
+# ValidateSet accepts any casing ('user'); use the canonical names in file names and CSV columns.
+$Action   = @('Inventory', 'Convert', 'Verify', 'Rollback') | Where-Object { $_ -eq $Action }
+$Category = @('ExchangeAttributes', 'User', 'Group', 'Contact') | Where-Object { $_ -eq $Category }
+$GroupType = @('Security', 'MailEnabledSecurity', 'Distribution', 'All') | Where-Object { $_ -eq $GroupType }
+$ExpectedState = @('CloudManaged', 'OnPremManaged') | Where-Object { $_ -eq $ExpectedState }
+
 #region Settings
 
 $ErrorActionPreference = 'Stop'
@@ -706,12 +712,12 @@ function New-UserInventoryRow {
         foreach ($name in $UserProperties) { $row[$name] = ConvertTo-CellValue $User.$name }
         foreach ($name in $ExtensionAttributeNames) { $row[$name] = ConvertTo-CellValue $User.onPremisesExtensionAttributes.$name }
 
-        try {
-            $manager = Invoke-GraphRequestWithRetry -Uri ("$GraphRoot/v1.0/users/$ObjectId/manager" + '?$select=id,userPrincipalName,displayName')
+        # $expand instead of GET .../manager: a user without a manager then has no 'manager' property
+        # instead of a 404, which Start-Transcript would log as an error even though it is handled.
+        $managerUri = "$GraphRoot/v1.0/users/$ObjectId" + '?$select=id&$expand=manager($select=id,userPrincipalName,displayName)'
+        $manager = (Invoke-GraphRequestWithRetry -Uri $managerUri).manager
+        if ($manager) {
             $row.managerUserPrincipalName = ConvertTo-CellValue $(if ($manager.userPrincipalName) { $manager.userPrincipalName } else { $manager.displayName })
-        }
-        catch {
-            if ((Get-HttpStatusCode -ErrorRecord $_) -ne 404) { throw }
         }
 
         $isCloudManaged = Get-GraphCloudManaged -Segment 'users' -ObjectId $ObjectId
