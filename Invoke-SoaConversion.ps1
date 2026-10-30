@@ -181,6 +181,7 @@ $GraphRoot           = 'https://graph.microsoft.com'
 # beta for the SOA endpoint only if v1.0 rejects the onPremisesSyncBehavior segment.
 $script:SoaApiVersion = 'v1.0'
 $script:ExoConnected  = $false
+$script:RecipientCache = $null   # ExternalDirectoryObjectId -> EXO recipient (Category User, inventory without CSV)
 
 $GraphSegment = @{ User = 'users'; Group = 'groups'; Contact = 'contacts' }
 
@@ -697,7 +698,7 @@ function Get-EligibleUsers {
 
 function New-UserInventoryRow {
     param([Parameter(Mandatory)][string]$ObjectId, [AllowNull()][object]$User)
-    $columns = $UserProperties + 'managerUserPrincipalName' + $ExtensionAttributeNames + 'isCloudManaged'
+    $columns = $UserProperties + 'managerUserPrincipalName' + $ExtensionAttributeNames + 'isCloudManaged' + 'MailboxLocation' + 'Exo_RecipientTypeDetails'
     $row = New-InventoryRow -ObjectId $ObjectId -Columns $columns
     try {
         if (-not $User) {
@@ -723,13 +724,62 @@ function New-UserInventoryRow {
         $isCloudManaged = Get-GraphCloudManaged -Segment 'users' -ObjectId $ObjectId
         $row.isCloudManaged = $isCloudManaged
         $row.CurrentSoaState = Get-GraphSoaStateName -GraphObject $User -IsCloudManaged $isCloudManaged
+
+        $recipient = Get-UserRecipient -ObjectId $ObjectId
+        $row.Exo_RecipientTypeDetails = ConvertTo-CellValue $recipient.RecipientTypeDetails
+        $row.MailboxLocation = Get-MailboxLocation -Recipient $recipient
+
         Set-RowEligibility -Row $row
+        if ($row.EligibleForConvert -and $row.MailboxLocation -eq 'OnPremises') {
+            $row.EligibleForConvert = $false
+            $row.Note = 'MailboxOnPremises: the mailbox is still on Exchange Server (EXO shows a MailUser with an ExchangeGuid); migrate it to Exchange Online before User SOA'
+        }
     }
     catch {
         $row.CurrentSoaState = 'Unknown'
         $row.Note = "Error: $(Get-ErrorText -ErrorRecord $_)"
     }
     return [pscustomobject]$row
+}
+
+function Initialize-RecipientCache {
+    # One bulk read instead of one EXO call per user, for an inventory of all synced users.
+    Write-Log 'Reading Exchange Online mailboxes and mail users...'
+    $script:RecipientCache = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+    $types = 'UserMailbox', 'SharedMailbox', 'RoomMailbox', 'EquipmentMailbox', 'MailUser'
+    foreach ($recipient in (Get-Recipient -RecipientTypeDetails $types -ResultSize Unlimited -WarningAction SilentlyContinue -ErrorAction Stop)) {
+        $id = "$($recipient.ExternalDirectoryObjectId)"
+        if ($id) { $script:RecipientCache[$id] = $recipient }
+    }
+    Write-Log "Exchange Online recipients read: $($script:RecipientCache.Count)"
+}
+
+function Get-UserRecipient {
+    # EXO recipient of a user, or $null if the user is not mail-enabled. Errors are thrown (fail closed).
+    param([Parameter(Mandatory)][string]$ObjectId)
+    if ($script:RecipientCache) {
+        if ($script:RecipientCache.ContainsKey($ObjectId)) { return $script:RecipientCache[$ObjectId] }
+        return $null
+    }
+    $found = @(Get-Recipient -Filter "ExternalDirectoryObjectId -eq '$ObjectId'" -ResultSize 2 -WarningAction SilentlyContinue -ErrorAction Stop)
+    if ($found.Count -gt 1) { throw "More than one Exchange Online recipient has ExternalDirectoryObjectId $ObjectId." }
+    if ($found.Count -eq 1) { return $found[0] }
+    return $null
+}
+
+function Get-MailboxLocation {
+    # A mailbox that is still on Exchange Server appears in EXO as a MailUser that carries the
+    # ExchangeGuid of the on-premises mailbox; a plain mail-enabled user has no ExchangeGuid.
+    param([AllowNull()][object]$Recipient)
+    if (-not $Recipient) { return 'NotMailEnabled' }
+    $type = "$($Recipient.RecipientTypeDetails)"
+    if ($type -like '*Mailbox') { return 'ExchangeOnline' }
+    if ($type -eq 'MailUser') {
+        $guid = "$($Recipient.ExchangeGuid)"
+        if ($guid -and $guid -ne [guid]::Empty.ToString()) { return 'OnPremises' }
+        return 'MailUserWithoutMailbox'
+    }
+    return $type
 }
 
 #endregion
@@ -1031,6 +1081,7 @@ function Invoke-SoaInventory {
         }
     }
     $items = @($items)
+    if (-not $fromCsv -and $Category -eq 'User') { Initialize-RecipientCache }
     Write-Log "Reading details for $($items.Count) object(s)..."
 
     $index = 0
@@ -1178,7 +1229,7 @@ function Show-ChangeWarning {
                     'User SOA conversion clears the IsExchangeCloudManaged state of the mailbox; the mailbox user is no longer dir-synced (IsDirSynced = False).',
                     'Sign-in: users federated through AD FS are NOT supported. Users must not depend on password-based on-premises authentication (LDAP bind, Kerberos with password).',
                     'Plan cloud authentication for these users (for example Windows Hello for Business with Cloud Kerberos Trust or FIDO2) and test sign-in with a pilot user first.',
-                    'Do not convert users whose mailboxes are still on Exchange Server; all mailboxes must be in Exchange Online.',
+                    'All mailboxes must be in Exchange Online. Users whose mailbox is still on Exchange Server are skipped (MailboxOnPremises).',
                     'onPremises* attributes (SamAccountName, DistinguishedName, SID, ...) stay on the cloud object and must be maintained manually if on-premises access is still needed.'
                 )
             }
@@ -1365,7 +1416,7 @@ if ($PSBoundParameters.ContainsKey('ExpectedState') -and $Action -ne 'Verify') {
 
 $needGraph = $Category -ne 'ExchangeAttributes'
 $needExo = $Category -eq 'ExchangeAttributes' -or
-    ($Action -ne 'Verify' -and ($Category -eq 'Contact' -or ($Category -eq 'Group' -and $GroupType -ne 'Security')))
+    ($Action -ne 'Verify' -and ($Category -in 'User', 'Contact' -or ($Category -eq 'Group' -and $GroupType -ne 'Security')))
 
 $runFolder = New-RunFolder
 $transcriptPath = Join-Path $runFolder 'Transcript.log'

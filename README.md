@@ -62,7 +62,7 @@ point to the same tenant.
 | Category | EXO | Graph |
 |---|---|---|
 | ExchangeAttributes | yes | no |
-| User | no | yes |
+| User | for Inventory/Convert/Rollback (checks where the mailbox is, see *Which objects end up in the inventory*) | yes |
 | Group | for Inventory/Convert/Rollback when `-GroupType` is not `Security` (EXO properties of mail-enabled groups in the backup) | yes |
 | Contact | for Inventory/Convert/Rollback (EXO properties of the contact in the backup) | yes |
 
@@ -71,7 +71,7 @@ point to the same tenant.
 | Category | Entra / EXO role (minimum) | Graph delegated scopes requested by the script |
 |---|---|---|
 | ExchangeAttributes | Exchange Administrator (recommended by Microsoft), or Hybrid Identity Administrator, or Global Administrator | – |
-| User | **Hybrid Administrator** | `User.Read.All`, `User-OnPremisesSyncBehavior.ReadWrite.All`, `RoleManagement.Read.Directory` (reads the members of the *Directory Synchronization Accounts* role, see *Protected system objects*) |
+| User | **Hybrid Administrator** (+ EXO read access to recipients, for example View-Only Recipients) | `User.Read.All`, `User-OnPremisesSyncBehavior.ReadWrite.All`, `RoleManagement.Read.Directory` (reads the members of the *Directory Synchronization Accounts* role, see *Protected system objects*) |
 | Group | **Hybrid Administrator** (+ EXO read access for mail-enabled groups, for example View-Only Recipients) | `Group.Read.All`, `GroupMember.Read.All`, `User.Read.All`, `Group-OnPremisesSyncBehavior.ReadWrite.All` |
 | Contact | **Hybrid Administrator** (+ EXO read access to contacts) | `OrgContact.Read.All`, `Contacts-OnPremisesSyncBehavior.ReadWrite.All` |
 
@@ -184,6 +184,57 @@ Notes:
 - After the conversion, DLs, MESGs and contacts are managed only in EXO and have no writeback to AD.
 - Writeback of mailbox Exchange attributes to AD requires Cloud Sync (*EXO to AD attribute sync*).
 
+## Which objects end up in the inventory
+
+Without `-InputCsv`, the inventory contains the objects that meet **all** conditions of their category:
+
+| Category | Conditions |
+|---|---|
+| **ExchangeAttributes** | The mailbox is **in EXO** (any type: user, shared, room, equipment), `IsDirSynced = True` (synchronized from AD), `IsExchangeCloudManaged = False` (Exchange attributes are still managed on-premises), not a protected system object. |
+| **User** | `onPremisesSyncEnabled = true` (synchronized from AD), `isCloudManaged = false`, not a protected system object, and the mailbox is **not** on Exchange Server (see below). Users without a mailbox and disabled users are included. |
+| **Group** | `onPremisesSyncEnabled = true`, `isCloudManaged = false`, the type matches `-GroupType`, not a Microsoft 365 group, not a protected system object. |
+| **Contact** | `onPremisesSyncEnabled = true`, `isCloudManaged = false`. |
+
+In every category, objects that could not be read are also included (`Note` starts with `Error:`); they are never
+changed. All other objects are left out, and the log summarizes them by reason (for example
+`ProtectedSystemObject`, `MailboxOnPremises`, `AlreadyCloudManaged`). With `-InputCsv`, every object of the CSV is
+in the report, with the reason in `Note` when it is not eligible.
+
+On-premises Exchange:
+- A mailbox that is still on Exchange Server appears in EXO as a **MailUser**, not as a mailbox, so it is not in
+  the ExchangeAttributes inventory. That is correct: the flag applies only to mailboxes in EXO.
+- For **User**, the script reads the user's EXO recipient and fills the column `MailboxLocation`:
+
+  | `MailboxLocation` | Meaning | Eligible for User Convert |
+  |---|---|---|
+  | `ExchangeOnline` | the mailbox is in EXO | yes |
+  | `OnPremises` | EXO shows a MailUser with the `ExchangeGuid` of an on-premises mailbox (the mailbox is still on Exchange Server, or a move is in progress) | **no**, `Note = MailboxOnPremises` |
+  | `MailUserWithoutMailbox` | a mail-enabled user without a mailbox (MailUser without `ExchangeGuid`) | yes |
+  | `NotMailEnabled` | no Exchange object | yes |
+
+  Microsoft requires all mailboxes to be in EXO before User SOA. If the EXO data cannot be read, the user is
+  marked `Error` and is not changed.
+
+## What the CSV must contain
+
+The CSV does not have to come from an Inventory; it can be created manually. Inventory, backup and results CSV
+files from this script can all be used as input.
+
+| | Verify | Convert / Rollback |
+|---|---|---|
+| Column `ObjectId` (Entra object ID; `ExternalDirectoryObjectId` for mailboxes) | required | required |
+| Column `Category` | optional; if present, it must equal `-Category` in every row | **required**, must equal `-Category` in every row |
+| Column `CurrentSoaState` or `StateAfter` | optional, used as `StateBefore` | ignored |
+| Encoding UTF-16 LE with BOM, delimiter `;` (or `-Delimiter`) | required | required |
+
+All other columns are ignored. Example of a manually created CSV:
+
+```powershell
+@('f85bcf82-d59a-48f6-ab43-ba75e21d447b', '43b290f8-87a4-4313-981c-12fa42dc14f7') |
+    ForEach-Object { [pscustomobject]@{ ObjectId = $_; Category = 'User' } } |
+    Export-Csv .\objects.csv -Delimiter ';' -Encoding Unicode -NoTypeInformation
+```
+
 ## Recommended order of work
 
 1. **Inventory**: `.\Invoke-SoaConversion.ps1 -Action Inventory -Category Group -GroupType Security`
@@ -283,7 +334,8 @@ Backup columns per category:
   backup:** mailbox permissions (`Get-MailboxPermission`) and junk e-mail settings; export them separately if you
   change them in the cloud. The on-premises DN, SAM and ImmutableId are not available in EXO, and the script does
   not connect to Graph for this category. Find the object in AD by UPN or PrimarySmtpAddress.
-- **User**: all requested attributes, `managerUserPrincipalName`, `extensionAttribute1-15`, all `onPremises*`.
+- **User**: all requested attributes, `managerUserPrincipalName`, `extensionAttribute1-15`, all `onPremises*`,
+  `MailboxLocation` and `Exo_RecipientTypeDetails`.
 - **Group**: the requested Graph attributes, `extensionAttribute1-15`, counts of members, cloud members, child and
   parent groups, owners, `SoaNotes`, and `Exo_*` columns for mail-enabled groups. Graph v1.0 has no
   `onPremisesDistinguishedName` or `onPremisesImmutableId` for groups; use `onPremisesSamAccountName` /
@@ -338,7 +390,8 @@ Recommendations:
   - users must not depend on on-premises password authentication (LDAP bind, Kerberos with a password),
   - passwordless authentication is recommended (Windows Hello for Business with **Cloud Kerberos Trust**, FIDO2),
   - with third-party federation, the AD account and password must be maintained manually.
-- All mailboxes must be in EXO before User SOA.
+- All mailboxes must be in EXO before User SOA. Users whose mailbox is still on Exchange Server are skipped
+  (`MailboxOnPremises`).
 - The `onPremises*` attributes stay on the cloud object and must be maintained manually if access to on-premises
   resources is still needed.
 
@@ -429,8 +482,10 @@ everything that was needed.
   the others continue, a failed verify, the PowerShell version check, module installation, and protected system
   objects.
 - **Real tenant (in progress):** inventory for all categories, input validation, `-WhatIf`, Convert and Rollback
-  for a test mailbox (ExchangeAttributes, including writeback), nested security groups, a distribution group and a
-  mail-enabled security group. Graph v1.0 works for `onPremisesSyncBehavior` in that tenant.
-- **Not yet tested:** Contact and User against a real tenant, Windows PowerShell 5.1 (the version message), and
+  for a test mailbox (ExchangeAttributes, including writeback), nested security groups, a distribution group, a
+  mail-enabled security group and a mail contact, and Convert for a test user. Graph v1.0 works for
+  `onPremisesSyncBehavior` in that tenant.
+- **Not yet tested:** the User mailbox-location check against a real tenant, User rollback and sign-in after a
+  User conversion, Windows PowerShell 5.1 (the version message), and
   PSScriptAnalyzer. Run PSScriptAnalyzer before production and follow the order above, starting with one pilot
   object.
