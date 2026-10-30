@@ -196,8 +196,7 @@ Notes:
 5. **Post-check the pilot**: the automatic Verify in the same run, then manually:
    - Entra admin center: the object's source is no longer "Windows Server AD DS"; Audit log activity
      *Change Source of Authority from AD to cloud*.
-   - After the next Connect Sync cycle: Event ID **6956** on the Connect server for that object (the change from
-     AD is blocked).
+   - After the next Connect Sync cycle: a change made to the object in AD does not appear in Entra ID / EXO.
    - User: a test sign-in of the pilot user (see the warnings below).
    - ExchangeAttributes: change an Exchange attribute in EXO and check the writeback to AD.
 6. **Convert a small batch** (for example `-MaxObjects 10`), then post-check again.
@@ -332,7 +331,7 @@ Recommendations:
   otherwise synchronization breaks during offboarding.
 
 **User Convert**:
-- The user becomes cloud authoritative and changes from AD are no longer applied (Connect Sync logs event 6956).
+- The user becomes cloud authoritative and changes from AD are no longer applied.
 - The conversion clears the `IsExchangeCloudManaged` state.
 - Sign-in and password, according to Microsoft's documentation:
   - users federated through **AD FS are not supported**,

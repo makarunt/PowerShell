@@ -1174,7 +1174,7 @@ function Show-ChangeWarning {
             }
             'User' {
                 Show-WarningBlock -Title 'USER SOA conversion - the whole user object becomes cloud authoritative' -Lines @(
-                    'Changes made in on-premises AD are no longer applied to these users (Connect Sync logs event 6956 instead).',
+                    'Changes made in on-premises AD are no longer applied to these users.',
                     'User SOA conversion clears the IsExchangeCloudManaged state of the mailbox; the mailbox user is no longer dir-synced (IsDirSynced = False).',
                     'Sign-in: users federated through AD FS are NOT supported. Users must not depend on password-based on-premises authentication (LDAP bind, Kerberos with password).',
                     'Plan cloud authentication for these users (for example Windows Hello for Business with Cloud Kerberos Trust or FIDO2) and test sign-in with a pilot user first.',
