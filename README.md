@@ -1,49 +1,52 @@
 # Invoke-SoaConversion.ps1
 
-Alat za promjenu Source of Authority (SOA) u hibridnom Microsoft 365 okruženju
-(on-prem AD + Entra Connect Sync + Exchange Online + Cloud Sync EXO→AD writeback).
+Tool for changing the Source of Authority (SOA) in a hybrid Microsoft 365 environment
+(on-premises AD + Entra Connect Sync + Exchange Online + Cloud Sync EXO→AD writeback).
 
-Skripta mijenja **samo SOA zastavicu**:
+The script changes **only the SOA flag**:
 
-| Kategorija | Promjena | Provjera |
+| Category | Change | Check |
 |---|---|---|
 | `ExchangeAttributes` | `Set-Mailbox -Identity <ExternalDirectoryObjectId> -IsExchangeCloudManaged $true/$false` | `Get-Mailbox` → `IsExchangeCloudManaged` |
 | `User` | `PATCH /users/{id}/onPremisesSyncBehavior` `{ "isCloudManaged": true/false }` | `GET /users/{id}/onPremisesSyncBehavior` |
 | `Group` | `PATCH /groups/{id}/onPremisesSyncBehavior` | `GET /groups/{id}/onPremisesSyncBehavior` |
 | `Contact` | `PATCH /contacts/{id}/onPremisesSyncBehavior` | `GET /contacts/{id}/onPremisesSyncBehavior` |
 
-Skripta **ne** mijenja tenant-wide postavke (npr. `Set-OrganizationConfig -ExchangeAttributesCloudManagedByDefault`,
-`blockCloudObjectTakeoverThroughHardMatchEnabled`), ne dira on-prem AD, Entra Connect ni Cloud Sync, ne mijenja
-druge atribute objekata i ne koristi app-only autentifikaciju (ako je postojeća EXO ili Graph konekcija app-only,
-skripta staje).
+The script does **not** change tenant-wide settings (for example
+`Set-OrganizationConfig -ExchangeAttributesCloudManagedByDefault` or
+`blockCloudObjectTakeoverThroughHardMatchEnabled`), does not touch on-premises AD, Entra Connect or Cloud Sync,
+does not change any other object attribute, and does not use app-only authentication (if an existing EXO or
+Graph connection is app-only, the script stops).
 
 ---
 
-## Preduvjeti
+## Prerequisites
 
-| Što | Verzija / napomena |
+| Item | Version / note |
 |---|---|
-| PowerShell | **7.2 ili noviji**. Windows PowerShell 5.1 nije podržan i ne treba ga. |
-| `ExchangeOnlineManagement` | 3.2.0+ (potreban za `Get-ConnectionInformation`; `Set-Mailbox` mora imati `-IsExchangeCloudManaged`, skripta to provjerava). |
-| `Microsoft.Graph.Authentication` | 2.x. Svi Graph pozivi idu kroz `Invoke-MgGraphRequest`. |
-| Entra Connect Sync | Za ExchangeAttributes **2.5.190.0+** (starije verzije pokušavaju gurnuti Exchange atribute već prebačenih mailboxova u Entra ID i ne uspijevaju). Za User/Group SOA min. 2.5.76.0, za **Contact SOA 2.5.79.0**. Provjera: `(Get-ADSyncGlobalSettings).Parameters['Microsoft.Synchronize.ServerConfigurationVersion']` |
-| Cloud Sync agent | Min. 1.1.1370.0 za User/Group SOA; **1.1.1107.0+** za Exchange attribute writeback (konfiguracija *EXO to AD attribute sync*). Cloud Sync radi uz Connect Sync, ne umjesto njega. |
-| Prijava | Interaktivna (delegated). Za `IsExchangeCloudManaged` app-only/certifikat nije podržan. |
+| PowerShell | **7.2 or later**. Windows PowerShell 5.1 is not supported and not needed. |
+| `ExchangeOnlineManagement` | 3.2.0+ (needed for `Get-ConnectionInformation`; `Set-Mailbox` must have `-IsExchangeCloudManaged`, which the script checks). |
+| `Microsoft.Graph.Authentication` | 2.x. All Graph calls go through `Invoke-MgGraphRequest`. |
+| Entra Connect Sync | **2.5.190.0+** for ExchangeAttributes (older versions try to push Exchange attributes of already transferred mailboxes to Entra ID and fail). At least 2.5.76.0 for User/Group SOA and **2.5.79.0 for Contact SOA**. Check: `(Get-ADSyncGlobalSettings).Parameters['Microsoft.Synchronize.ServerConfigurationVersion']` |
+| Cloud Sync agent | At least 1.1.1370.0 for User/Group SOA; **1.1.1107.0+** for Exchange attribute writeback (configuration *EXO to AD attribute sync*). Cloud Sync runs next to Connect Sync, not instead of it. |
+| Sign-in | Interactive (delegated). App-only / certificate authentication is not supported for `IsExchangeCloudManaged`. |
 
-Provjera pri pokretanju:
-- **PowerShell:** ako je verzija starija od 7.2 (npr. Windows PowerShell 5.1), skripta ispiše potrebnu verziju i
-  kako instalirati PowerShell 7 (`winget install --id Microsoft.PowerShell --source winget`), te završi s exit
-  kodom 3 bez ikakve promjene i bez izlazne mape. Skriptu treba pokretati iz `pwsh`, ne iz `powershell`.
-- **Moduli:** provjeravaju se samo moduli potrebni za odabranu kategoriju. Ako modul nedostaje ili je prestar,
-  skripta pita `Install '<modul>' from the PowerShell Gallery for the current user now? [Y/N]`.
-  - Na `Y` instalira modul (`Install-Module -Scope CurrentUser -Repository PSGallery -Force`, uz starije
-    verzije ako postoje) i nastavlja.
-  - Na bilo koji drugi odgovor staje i ispiše naredbu za ručnu instalaciju.
-  - Ako je u istoj sesiji već učitana prestara verzija modula, skripta traži novu PowerShell sesiju.
-  - Instalacija se radi i kad je skripta pokrenuta s `-WhatIf`, jer je to lokalna promjena koju si upravo
-    potvrdio.
+Checks at start-up:
+- **PowerShell:** if the version is older than 7.2 (for example Windows PowerShell 5.1), the script prints the
+  required version and how to install PowerShell 7 (`winget install --id Microsoft.PowerShell --source winget`),
+  then exits with code 3 without any change and without creating an output folder. Run the script from `pwsh`,
+  not from `powershell`.
+- **Modules:** only the modules needed for the selected category are checked. If a module is missing or too old,
+  the script asks `Install '<module>' from the PowerShell Gallery for the current user now? [Y/N]`.
+  - `Y` installs the module (`Install-Module -Scope CurrentUser -Repository PSGallery -Force`, side by side with
+    older versions if present) and continues.
+  - Any other answer stops the script and prints the command for a manual installation.
+  - If an older version of the module is already loaded in the same session, the script asks for a new
+    PowerShell session.
+  - The installation also runs when the script is started with `-WhatIf`, because it is a local change that
+    you have just confirmed.
 
-Ručna instalacija, ako je radije želiš unaprijed:
+Manual installation, if you prefer to do it in advance:
 
 ```powershell
 Install-Module ExchangeOnlineManagement -MinimumVersion 3.2.0 -Scope CurrentUser
@@ -52,295 +55,322 @@ Install-Module ExchangeOnlineManagement -MinimumVersion 3.2.0 -Scope CurrentUser
 Install-Module Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -Scope CurrentUser
 ```
 
-Skripta se spaja samo na servise koji su kategoriji potrebni, i to prvo na EXO, a zatim na Graph (redoslijed
-smanjuje rizik od sukoba MSAL biblioteka između dva modula). Ako su obje konekcije aktivne, provjerava da su na
-istom tenantu.
+The script connects only to the services the category needs, EXO first and then Graph (this order reduces the
+risk of MSAL library conflicts between the two modules). When both connections are active, it checks that they
+point to the same tenant.
 
-| Kategorija | EXO | Graph |
+| Category | EXO | Graph |
 |---|---|---|
-| ExchangeAttributes | da | ne |
-| User | ne | da |
-| Group | za Inventory/Convert/Rollback kad `-GroupType` nije `Security` (EXO svojstva mail-enabled grupa u backupu) | da |
-| Contact | za Inventory/Convert/Rollback (EXO svojstva kontakta u backupu) | da |
+| ExchangeAttributes | yes | no |
+| User | no | yes |
+| Group | for Inventory/Convert/Rollback when `-GroupType` is not `Security` (EXO properties of mail-enabled groups in the backup) | yes |
+| Contact | for Inventory/Convert/Rollback (EXO properties of the contact in the backup) | yes |
 
-## Uloge i dozvole
+## Roles and permissions
 
-| Kategorija | Entra / EXO uloga (minimalno) | Graph delegated scope koji skripta traži |
+| Category | Entra / EXO role (minimum) | Graph delegated scopes requested by the script |
 |---|---|---|
-| ExchangeAttributes | Exchange Administrator (Microsoft preporučuje), ili Hybrid Identity Administrator, ili Global Administrator | – |
-| User | **Hybrid Administrator** | `User.Read.All`, `User-OnPremisesSyncBehavior.ReadWrite.All`, `RoleManagement.Read.Directory` (čitanje članova uloge *Directory Synchronization Accounts*, vidi *Zaštićeni sistemski objekti*) |
-| Group | **Hybrid Administrator** (+ EXO čitanje za mail-enabled grupe, npr. View-Only Recipients) | `Group.Read.All`, `GroupMember.Read.All`, `User.Read.All`, `Group-OnPremisesSyncBehavior.ReadWrite.All` |
-| Contact | **Hybrid Administrator** (+ EXO čitanje kontakata) | `OrgContact.Read.All`, `Contacts-OnPremisesSyncBehavior.ReadWrite.All` |
+| ExchangeAttributes | Exchange Administrator (recommended by Microsoft), or Hybrid Identity Administrator, or Global Administrator | – |
+| User | **Hybrid Administrator** | `User.Read.All`, `User-OnPremisesSyncBehavior.ReadWrite.All`, `RoleManagement.Read.Directory` (reads the members of the *Directory Synchronization Accounts* role, see *Protected system objects*) |
+| Group | **Hybrid Administrator** (+ EXO read access for mail-enabled groups, for example View-Only Recipients) | `Group.Read.All`, `GroupMember.Read.All`, `User.Read.All`, `Group-OnPremisesSyncBehavior.ReadWrite.All` |
+| Contact | **Hybrid Administrator** (+ EXO read access to contacts) | `OrgContact.Read.All`, `Contacts-OnPremisesSyncBehavior.ReadWrite.All` |
 
-- I `GET` i `PATCH` na `onPremisesSyncBehavior` traže `*-OnPremisesSyncBehavior.ReadWrite.All`, pa ga traži i Inventory.
-- Prvi put netko s ulogom **Application Administrator** ili **Cloud Application Administrator** mora dati
-  consent za ove scopeove aplikaciji *Microsoft Graph Command Line Tools* (Entra admin center →
-  Enterprise applications → Microsoft Graph Command Line Tools → Permissions → Grant admin consent).
-  Ako scope nije dodijeljen, skripta staje prije bilo kakvog čitanja ili promjene.
+- Both `GET` and `PATCH` on `onPremisesSyncBehavior` require `*-OnPremisesSyncBehavior.ReadWrite.All`, so
+  Inventory requests it too.
+- The first time, someone with the **Application Administrator** or **Cloud Application Administrator** role
+  must grant consent for these scopes to the *Microsoft Graph Command Line Tools* application (Entra admin
+  center → Enterprise applications → Microsoft Graph Command Line Tools → Permissions → Grant admin consent).
+  If a scope has not been granted, the script stops before reading or changing anything.
 
-## Parametri
+## Parameters
 
 ```
--Action        Inventory | Convert | Verify | Rollback       (obavezan)
--Category      ExchangeAttributes | User | Group | Contact   (obavezan)
--InputCsv      obavezan za Convert/Verify/Rollback; opcionalan za Inventory
--GroupType     Security | MailEnabledSecurity | Distribution | All   (samo Category=Group, default All)
+-Action        Inventory | Convert | Verify | Rollback       (required)
+-Category      ExchangeAttributes | User | Group | Contact   (required)
+-InputCsv      required for Convert/Verify/Rollback; optional for Inventory
+-GroupType     Security | MailEnabledSecurity | Distribution | All   (Category=Group only, default All)
 -OutputFolder  default .\SoaOutput
--MaxObjects    obradi najviše N objekata (prvih N redova CSV-a / prvih N prihvatljivih kod Inventoryja)
+-MaxObjects    process at most N objects (first N rows of the CSV / first N eligible objects for Inventory)
 -Delimiter     default ';'
--ExpectedState CloudManaged (default) | OnPremManaged   (samo Verify)
+-ExpectedState CloudManaged (default) | OnPremManaged   (Verify only)
 -WhatIf / -Confirm
 ```
 
-`-ExpectedState` nije bio u zahtjevu. Dodan je kako bi se samostalni Verify mogao koristiti i nakon rollbacka.
+`-ExpectedState` was not part of the original specification. It was added so that a stand-alone Verify can also
+be used after a rollback.
 
-Za Group, `-GroupType` se primjenjuje u svim akcijama: grupa drugog tipa u CSV-u preskače se s napomenom
-`GroupTypeNotSelected`. Microsoft 365 (Unified) grupe nikad nisu prihvatljive.
+Parameter values are case-insensitive (`-Category user` works) and are normalized to the canonical names used in
+folder names and CSV columns.
 
-## Zaštićeni sistemski objekti
+For Group, `-GroupType` applies to every action: a group of another type in the CSV is skipped with the note
+`GroupTypeNotSelected`. Microsoft 365 (Unified) groups are never eligible.
 
-Skripta neke objekte nikad ne mijenja, ni Convertom ni Rollbackom. Takav objekt dobije u stupcu `Note` vrijednost
-`ProtectedSystemObject: <razlog>`. Inventory bez CSV-a ih izostavlja i javi koliko ih je pronašao; s CSV-om su
-vidljivi s razlogom, a Convert i Rollback ih preskaču.
+## Protected system objects
 
-| Pravilo | Što hvata |
+Some objects are never changed by the script, neither by Convert nor by Rollback. Such an object gets the value
+`ProtectedSystemObject: <reason>` in the `Note` column. Inventory without a CSV leaves them out and reports how
+many it found; with a CSV they are shown with the reason, and Convert and Rollback skip them.
+
+| Rule | What it catches |
 |---|---|
-| Članovi Entra uloge **Directory Synchronization Accounts** (template `d29b2b05-8046-44ba-8758-1e26182fcf32`) | Entra Connect / Cloud Sync service račun, bez obzira na ime. Samo kategorija User. Ako se članovi uloge ne mogu pročitati, skripta staje (fail closed). |
-| Uzorci imena (UPN, alias/mailNickname, display name, on-prem SAM/UPN) | `Sync_*`, `ADToAADSyncServiceAccount*`, *On-Premises Directory Synchronization Service Account*, `MSOL_*`, `AAD_*`, Administrator, Guest, krbtgt, DefaultAccount, `SUPPORT_388945a0*`, Exchange sistemski mailboxovi (`HealthMailbox*`, `SystemMailbox{*`, `DiscoverySearchMailbox*`, `FederatedEmail.*`, `Migration.8f3e7716*`, `SM_*`, `CAS_{*`) |
-| Ugrađene grupe (točan naziv) | Exchange RBAC grupe (*Organization Management*, *Recipient Management*, *Exchange Servers*, *Exchange Trusted Subsystem*, …), *DnsAdmins*, *DnsUpdateProxy* |
-| On-prem SID s well-known RID-om (< 1000) | Ugrađeni korisnici i grupe (Administrator 500, krbtgt 502, Domain Admins 512, …), čak i ako su preimenovani. |
+| Members of the Entra role **Directory Synchronization Accounts** (template `d29b2b05-8046-44ba-8758-1e26182fcf32`) | Entra Connect / Cloud Sync service accounts, whatever their name. Category User only. If the role members cannot be read, the script stops (fail closed). |
+| Name patterns (UPN, alias/mailNickname, display name, on-premises SAM/UPN) | `Sync_*`, `ADToAADSyncServiceAccount*`, *On-Premises Directory Synchronization Service Account*, `MSOL_*`, `AAD_*`, Administrator, Guest, krbtgt, DefaultAccount, `SUPPORT_388945a0*`, Exchange system mailboxes (`HealthMailbox*`, `SystemMailbox{*`, `DiscoverySearchMailbox*`, `FederatedEmail.*`, `Migration.8f3e7716*`, `SM_*`, `CAS_{*`) |
+| Built-in groups (exact name) | Exchange RBAC groups (*Organization Management*, *Recipient Management*, *Exchange Servers*, *Exchange Trusted Subsystem*, …), *DnsAdmins*, *DnsUpdateProxy* |
+| On-premises SID with a well-known RID (< 1000) | Built-in users and groups (Administrator 500, krbtgt 502, Domain Admins 512, …), even when renamed. |
 
-Uloga *Directory Synchronization Accounts* je Microsoftov preporučeni način pronalaženja sync računa
-(*Entra Connect: Accounts and permissions*). Pogrešno prepoznavanje samo preskače objekt, pa su liste namjerno
-šire. Liste su na vrhu skripte (`$ProtectedNamePatterns`, `$ProtectedGroupNames`) i mogu se dopuniti ako
-pronađeš još neki sistemski račun.
+The *Directory Synchronization Accounts* role is Microsoft's recommended way to find sync accounts
+(*Entra Connect: Accounts and permissions*). A false match only skips an object, so the lists are deliberately
+broad. The lists are at the top of the script (`$ProtectedNamePatterns`, `$ProtectedGroupNames`) and can be
+extended if you find another system account.
 
-## Preporučeni redoslijed rada
+## Recommended order of work
 
 1. **Inventory**: `.\Invoke-SoaConversion.ps1 -Action Inventory -Category Group -GroupType Security`
-2. **Pregled CSV-a**: provjerite stupce `CurrentSoaState`, `EligibleForConvert`, `Note`, `SoaNotes` (za grupe).
-   Obrišite redove koje ne želite konvertirati (vidi *CSV i Excel* niže, zbog encodinga).
-3. **Convert s `-WhatIf`**: validira CSV, radi svježi backup i pokazuje što bi se promijenilo. Ništa se ne mijenja.
+2. **Review the CSV**: check the columns `CurrentSoaState`, `EligibleForConvert`, `Note`, `SoaNotes` (groups).
+   Delete the rows you do not want to convert (see *CSV and Excel* below, because of the encoding).
+3. **Convert with `-WhatIf`**: validates the CSV, takes a fresh backup and shows what would change. Nothing is
+   changed.
    `.\Invoke-SoaConversion.ps1 -Action Convert -Category Group -InputCsv .\groups.csv -WhatIf`
-4. **Convert s `-MaxObjects 1`**: jedan pilot objekt.
-5. **Post-check pilota**: automatski Verify u istom runu, zatim ručno:
-   - Entra admin center: objekt više nije "Windows Server AD DS" source; Audit log aktivnost
+4. **Convert with `-MaxObjects 1`**: one pilot object.
+5. **Post-check the pilot**: the automatic Verify in the same run, then manually:
+   - Entra admin center: the object's source is no longer "Windows Server AD DS"; Audit log activity
      *Change Source of Authority from AD to cloud*.
-   - Nakon sljedećeg Connect Sync ciklusa: Event ID **6956** na Connect serveru za taj objekt (promjena
-     iz AD-a je blokirana).
-   - Za User: probna prijava pilot korisnika (vidi upozorenja niže).
-   - Za ExchangeAttributes: promjena Exchange atributa u EXO i provjera writebacka u AD.
-6. **Convert manjeg skupa** (npr. `-MaxObjects 10`), pa ponovno post-check.
-7. **Convert ostatka** istog CSV-a. Već konvertirani objekti preskaču se kao `AlreadyCloudManaged`.
-8. **Verify** po potrebi kasnije: `-Action Verify -InputCsv <bilo koji CSV s ObjectId>`.
-9. **Rollback** samo ako je potrebno (vidi niže).
+   - After the next Connect Sync cycle: Event ID **6956** on the Connect server for that object (the change from
+     AD is blocked).
+   - User: a test sign-in of the pilot user (see the warnings below).
+   - ExchangeAttributes: change an Exchange attribute in EXO and check the writeback to AD.
+6. **Convert a small batch** (for example `-MaxObjects 10`), then post-check again.
+7. **Convert the rest** of the same CSV. Objects that are already converted are skipped as `AlreadyCloudManaged`.
+8. **Verify** later as needed: `-Action Verify -InputCsv <any CSV with ObjectId>`.
+9. **Rollback** only when needed (see below).
 
-Za ugniježđene grupe: SOA se ne prenosi na podgrupe, pa se svaka grupa konvertira posebno, počevši od najniže
-razine. Stupci `IsNested`, `ParentGroups` i `ChildGroups` u inventoryju pokazuju strukturu.
+Nested groups: SOA is not inherited by child groups, so each group is converted separately. Microsoft recommends
+starting at the lowest level. The script processes the groups in the order of the CSV, so put child groups
+above their parents if you want to follow that recommendation. The columns `IsNested`, `ParentGroups` and
+`ChildGroups` in the inventory show the direct nesting (one level up and down).
 
-## Što se događa u svakoj akciji
+## What happens in each action
 
 **Inventory**
-- Bez `-InputCsv`: Graph upit `$filter=onPremisesSyncEnabled eq true` s `ConsistencyLevel: eventual` i
-  `$count=true`, uz paging preko `@odata.nextLink`. Za mailboxove `Get-Mailbox -Filter 'IsDirSynced -eq $true'`.
-  U izvještaj ulaze samo prihvatljivi objekti.
-- S `-InputCsv`: jedan red po ObjectId-u; neprihvatljivi i nepronađeni dobiju razlog u stupcu `Note`.
-- `isCloudManaged` se čita **po objektu** (`GET .../onPremisesSyncBehavior`), jer se ne može dohvatiti list
-  upitom (vidi *Razlike*). Za velike tenante to je jedan dodatni poziv po objektu (kod usera dva, zbog managera).
+- Without `-InputCsv`: Graph query `$filter=onPremisesSyncEnabled eq true` with `ConsistencyLevel: eventual` and
+  `$count=true`, with paging via `@odata.nextLink`. For mailboxes `Get-Mailbox -Filter 'IsDirSynced -eq $true'`.
+  The report contains the eligible objects plus any object that could not be read (`Note` starts with
+  `Error:`); the objects that were left out are summarized by reason in the log.
+- With `-InputCsv`: one row per ObjectId; ineligible and missing objects get the reason in the `Note` column.
+- `isCloudManaged` is read **per object** (`GET .../onPremisesSyncBehavior`), because it cannot be retrieved with
+  a list query (see *Notes from the Microsoft documentation*). In large tenants this means one extra call per
+  object (two for users, because of the manager).
 
 **Convert / Rollback**
-1. CSV mora imati stupce `ObjectId` i `Category`, a `Category` mora biti jednak `-Category` u **svim** redovima.
-   U suprotnom skripta staje. Neispravan GUID u bilo kojem redu također zaustavlja skriptu. Duplikati i prazni
-   redovi se ignoriraju (uz upozorenje).
-2. Svježi inventory služi kao backup (`Backup_Inventory_<Category>.csv`, za grupe i `Backup_GroupMemberships.csv`).
-   Ako se backup ne može zapisati, skripta staje prije promjene.
-3. Ponovna provjera prihvatljivosti:
-   - Convert preskače `AlreadyCloudManaged`, `NotFound`, `NotSynced`, `GroupTypeNotSelected` i greške čitanja.
-   - Rollback mijenja samo objekte koji su sada `CloudManaged`. Preskače grupe s cloud članovima
-     (`CloudMemberCount > 0`), jer Microsoft traži da se cloud reference uklone prije rollbacka.
-4. Upozorenje za kategoriju, sažetak i potvrda upisom `YES` (osjetljivo na velika/mala slova).
-   Za **User Convert** traže se dvije potvrde. S `-WhatIf` nema potvrde i ništa se ne mijenja.
-5. Promjena objekt po objekt (`ShouldProcess`; s `-Confirm` pita za svaki objekt). Greška na jednom objektu
-   ne zaustavlja ostale.
-6. Graph 429 i 500/502/503/504: do 6 pokušaja, uz `Retry-After` ako ga servis vrati, inače eksponencijalni
-   backoff (najviše 60 s).
-7. Automatski Verify: do 5 provjera s pauzom od 20 s (eventual consistency).
+1. The CSV must have the columns `ObjectId` and `Category`, and `Category` must equal `-Category` in **every**
+   row. Otherwise the script stops. An invalid GUID in any row also stops the script. Duplicate and empty rows
+   are ignored (with a warning).
+2. A fresh inventory serves as the backup (`Backup_Inventory_<Category>.csv`, for groups also
+   `Backup_GroupMemberships.csv`). If the backup cannot be written, the script stops before any change.
+3. Eligibility is checked again:
+   - Convert skips `AlreadyCloudManaged`, `NotFound`, `NotSynced`, `GroupTypeNotSelected`, protected objects and
+     read errors.
+   - Rollback changes only objects that are currently `CloudManaged`. It skips groups with cloud members
+     (`CloudMemberCount > 0`), because Microsoft requires cloud references to be removed before a rollback.
+     With nested groups this means one run per level, with a sync cycle in between.
+4. Category warning, summary and confirmation by typing `YES` (case-sensitive). **User Convert** asks for two
+   confirmations. With `-WhatIf` there is no confirmation and nothing is changed.
+5. Changes are made one object at a time (`ShouldProcess`; with `-Confirm` it asks for every object). An error on
+   one object does not stop the others.
+6. Graph 429 and 500/502/503/504: up to 6 attempts, using `Retry-After` when the service returns it, otherwise
+   exponential backoff (at most 60 s).
+7. Automatic Verify: up to 5 checks with a 20 s pause (eventual consistency).
 
-**Verify** (samostalno): čita trenutno stanje svakog ObjectId-a iz CSV-a, bez ponavljanja. `StateBefore` se uzima
-iz stupca `CurrentSoaState` ili `StateAfter` ulaznog CSV-a, ako postoji.
+**Verify** (stand-alone): reads the current state of every ObjectId in the CSV, without retries. `StateBefore` is
+taken from the `CurrentSoaState` or `StateAfter` column of the input CSV, if present.
 
-## Izlazne datoteke
+## Output files
 
-Svaki run kreira `OutputFolder\yyyyMMdd_HHmmss_<Action>_<Category>` (uz sufiks `_1`, `_2`… ako mapa već postoji).
-Postojeće datoteke se nikad ne prepisuju.
+Every run creates `OutputFolder\yyyyMMdd_HHmmss_<Action>_<Category>` (with a suffix `_1`, `_2`, … if the folder
+already exists). Existing files are never overwritten.
 
-| Datoteka | Kada |
+| File | When |
 |---|---|
-| `Transcript.log` | uvijek |
+| `Transcript.log` | always |
 | `Inventory_<Category>.csv` | Inventory |
 | `GroupMemberships.csv` | Inventory, Group |
 | `Backup_Inventory_<Category>.csv` (+ `Backup_GroupMemberships.csv`) | Convert, Rollback |
 | `Results_<Action>_<Category>.csv` | Convert, Rollback, Verify |
 
-- Ključ u svim CSV-ovima je `ObjectId` (Entra object ID, za mailboxove `ExternalDirectoryObjectId`).
-- Svaki CSV ima `Category` i `CurrentSoaState`. Results CSV ima tražene stupce
-  `ObjectId; DisplayName; Category; StateBefore; StateAfter; Status; ErrorMessage; Timestamp` i na kraju
-  `CurrentSoaState` (= `StateAfter`), pa se može izravno koristiti kao ulaz za Verify ili Rollback.
-- Više vrijednosti u jednoj ćeliji odvojene su s `|`. Složeni objekti (npr. adrese kontakta) zapisani su kao
-  kompaktni JSON, a telefoni kontakta kao `tip:broj`.
+- The key in every CSV is `ObjectId` (Entra object ID; `ExternalDirectoryObjectId` for mailboxes).
+- Every CSV has `Category` and `CurrentSoaState`. The results CSV has the columns
+  `ObjectId; DisplayName; Category; StateBefore; StateAfter; Status; ErrorMessage; Timestamp` and, at the end,
+  `CurrentSoaState` (= `StateAfter`), so it can be used directly as input for Verify or Rollback.
+- Multiple values in one cell are separated by `|`. Complex objects (for example contact addresses) are written as
+  compact JSON, contact phones as `type:number`.
 
-`CurrentSoaState` vrijednosti:
+`CurrentSoaState` values:
 
-| Vrijednost | Značenje |
+| Value | Meaning |
 |---|---|
-| `OnPremManaged` | Graph: `onPremisesSyncEnabled=true`, `isCloudManaged=false`. EXO: `IsDirSynced=true`, `IsExchangeCloudManaged=false`. Prihvatljivo za Convert. |
+| `OnPremManaged` | Graph: `onPremisesSyncEnabled=true`, `isCloudManaged=false`. EXO: `IsDirSynced=true`, `IsExchangeCloudManaged=false`. Eligible for Convert. |
 | `CloudManaged` | `isCloudManaged=true` / `IsExchangeCloudManaged=true`. |
-| `NotSynced` | Graph: `isCloudManaged=false` i `onPremisesSyncEnabled` nije `true` (cloud-only objekt **ili** rollback koji čeka sljedeći sync ciklus). EXO: `IsDirSynced=false`. |
-| `NotFound` | Objekt s tim ObjectId-om ne postoji. |
-| `Unknown` | Greška pri čitanju (razlog je u `Note` / `ErrorMessage`). |
+| `NotSynced` | Graph: `isCloudManaged=false` and `onPremisesSyncEnabled` is not `true` (a cloud-only object **or** a rollback waiting for the next sync cycle). EXO: `IsDirSynced=false`. |
+| `NotFound` | No object with this ObjectId exists. |
+| `Unknown` | Read error (the reason is in `Note` / `ErrorMessage`). |
 
-Backup stupci po kategoriji:
-- **ExchangeAttributes**: svi traženi atributi, `UserCertificate`/`UserSMimeCertificate` samo kao
-  `HasUserCertificate`/`HasUserSMimeCertificate` (True/False), te `Guid` i `ExchangeGuid`. Dodani su i ostali
-  atributi koje Microsoftova tablica navodi kao uređive u EXO nakon prebacivanja (ArchiveName, Audit*,
-  SingleItemRecoveryEnabled, LitigationHoldDate/Owner, retention hold datumi, RetentionComment/Url,
-  MailTipTranslations, moderacija, Resource*, ImmutableId) te `AssistantName` iz `Get-User`. **Nisu u backupu:**
-  mailbox permissions (`Get-MailboxPermission`) i junk e-mail postavke; izvezite ih zasebno ako ih mijenjate u
-  cloudu. On-prem DN, SAM i
-  ImmutableId nisu u EXO, a skripta za ovu kategoriju ne spaja Graph. Objekt u AD-u pronađite po UPN-u ili
-  PrimarySmtpAddress.
-- **User**: svi traženi atributi, `managerUserPrincipalName`, `extensionAttribute1-15`, svi `onPremises*`.
-- **Group**: traženi Graph atributi, `extensionAttribute1-15`, broj članova, cloud članova, podgrupa i nadgrupa,
-  vlasnici, `SoaNotes`, te `Exo_*` stupci za mail-enabled grupe. Graph v1.0 za grupe nema
-  `onPremisesDistinguishedName` ni `onPremisesImmutableId`; za pronalazak u AD-u koristite
-  `onPremisesSamAccountName` / `onPremisesSecurityIdentifier`.
-- **Contact**: traženi atributi + `Exo_ExternalEmailAddress`, `Exo_HiddenFromAddressListsEnabled`,
-  `Exo_EmailAddresses`. Graph za kontakte nema on-prem DN.
+Backup columns per category:
+- **ExchangeAttributes**: all requested attributes, `UserCertificate`/`UserSMimeCertificate` only as
+  `HasUserCertificate`/`HasUserSMimeCertificate` (True/False), plus `Guid` and `ExchangeGuid`. It also contains
+  the other attributes that Microsoft's table lists as editable in EXO after the transfer (ArchiveName, Audit*,
+  SingleItemRecoveryEnabled, LitigationHoldDate/Owner, retention hold dates, RetentionComment/Url,
+  MailTipTranslations, moderation, Resource*, ImmutableId) and `AssistantName` from `Get-User`. **Not in the
+  backup:** mailbox permissions (`Get-MailboxPermission`) and junk e-mail settings; export them separately if you
+  change them in the cloud. The on-premises DN, SAM and ImmutableId are not available in EXO, and the script does
+  not connect to Graph for this category. Find the object in AD by UPN or PrimarySmtpAddress.
+- **User**: all requested attributes, `managerUserPrincipalName`, `extensionAttribute1-15`, all `onPremises*`.
+- **Group**: the requested Graph attributes, `extensionAttribute1-15`, counts of members, cloud members, child and
+  parent groups, owners, `SoaNotes`, and `Exo_*` columns for mail-enabled groups. Graph v1.0 has no
+  `onPremisesDistinguishedName` or `onPremisesImmutableId` for groups; use `onPremisesSamAccountName` /
+  `onPremisesSecurityIdentifier` to find the group in AD.
+- **Contact**: the requested attributes plus `Exo_ExternalEmailAddress`, `Exo_HiddenFromAddressListsEnabled`,
+  `Exo_EmailAddresses`. Graph has no on-premises DN for contacts.
 
-## CSV i Excel
+## CSV and Excel
 
-CSV-ovi se zapisuju kao `-Encoding Unicode` (UTF-16 LE s BOM-om), kako ste tražili, a import čita isti encoding.
-Skripta odbija ulazni CSV bez UTF-16 BOM-a, umjesto da tiho pročita krive znakove.
+CSV files are written with `-Encoding Unicode` (UTF-16 LE with BOM), and import reads the same encoding. The
+script rejects an input CSV without a UTF-16 LE BOM (bytes `FF FE`) instead of silently reading wrong characters.
+The same format is called *UTF-16 LE* in Notepad and VS Code, *UTF-16 LE BOM* (older versions: *UCS-2 LE BOM*) in
+Notepad++, and *Unicode Text* in Excel.
 
-**Moguć problem (nije testiran u Excelu):** Excel UTF-16 datoteke otvara kao *Unicode Text*, što za Excel znači
-**tab** kao separator. Dijakritici (č, ć, ž, š, đ) bit će ispravni, ali na dvoklik se svi stupci mogu pojaviti u
-jednom stupcu. Preporuke:
-- Za pregled: Excel → *Data → From Text/CSV*, File Origin *Unicode (UTF-16 LE)*, Delimiter *Semicolon*.
-- Za brisanje redova prije Converta najsigurnije je koristiti tekst editor (VS Code, Notepad++) i spremiti kao
-  UTF-16 LE. Ako se datoteka sprema iz Excela kao *Unicode Text*, ona postaje tab-delimited; tada pokrenite
-  skriptu s ``-Delimiter "`t"``. Skripta jasno javi ako ne pronađe stupac `ObjectId`.
-- Ako vam UTF-8 s BOM-om više odgovara (Excel s hrvatskim regionalnim postavkama ga na dvoklik otvara ispravno
-  i s `;`), promijenite jednu varijablu na vrhu skripte: `$CsvEncoding = 'utf8BOM'`. Import tada mora koristiti
-  isti encoding, a provjera BOM-a u `Read-InputCsv` treba se prilagoditi.
+**Known Excel behaviour (confirmed):** Excel opens UTF-16 files as *Unicode Text*, which for Excel means **tab**
+as the separator. Diacritics are displayed correctly, but on double-click all columns end up in column A.
+Recommendations:
+- To view: Excel → *Data → From Text/CSV*, File Origin *Unicode (UTF-16 LE)*, Delimiter *Semicolon*, or split the
+  column with *Text to Columns*.
+- To delete rows before a Convert, use a text editor (Notepad, VS Code) and save as UTF-16 LE, or filter with
+  `Import-Csv` / `Export-Csv -Encoding Unicode -Delimiter ';'` in PowerShell. A file saved from Excel as
+  *Unicode Text* is tab-delimited; run the script with ``-Delimiter "`t"`` in that case. A file saved as
+  *CSV UTF-8* or *CSV (comma delimited)* is rejected because it is not UTF-16. The script reports clearly when it
+  cannot find the `ObjectId` column or the encoding is wrong.
+- Never save backup CSV files from Excel: Excel can change values (leading zeros, long numbers, dates).
+- If UTF-8 with BOM suits you better (Excel with Croatian regional settings opens it correctly on double-click,
+  with `;`), change one variable at the top of the script: `$CsvEncoding = 'utf8BOM'`. Import must then use the
+  same encoding, and the BOM check in `Read-InputCsv` has to be adapted.
 
-## Upozorenja koja skripta prikazuje
+## Warnings shown by the script
 
-**ExchangeAttributes Convert** (prema Microsoftu):
-- Od zadnje on-prem promjene (`Set-RemoteMailbox`) ili premještanja mailboxa mora proći puni sync ciklus + 24 h
-  (npr. sync 6 h = ukupno 30 h).
-- Nakon premještanja mailboxa: prvo potvrdite da je premještanje gotovo i da je on-prem objekt RemoteMailbox.
-  Zatim pričekajte da se atributi nakon premještanja sinkroniziraju u Entra ID, pa tek onda počnite brojati 24 h.
-  Prerana konverzija može dovesti do toga da writeback zastarjelim cloud recipient-type vrijednostima prepiše
-  ispravne remote-mailbox vrijednosti u AD-u.
-- Skripta to ne može provjeriti.
-- Writeback u AD (Cloud Sync) postoji samo za CustomAttribute1-15, ExtensionCustomAttribute1-5, mail
-  (WindowsEmailAddress), proxyAddresses i recipient type. Ostalo (npr. HiddenFromAddressListsEnabled,
-  forwarding, moderacija) ostaje samo u cloudu, a nakon rollbacka se vraća na vrijednost iz AD-a.
-- Prije vraćanja mailboxa on-prem (offboarding) treba prvo napraviti Rollback (`IsExchangeCloudManaged = $false`),
-  inače sinkronizacija pri offboardingu puca.
+**ExchangeAttributes Convert** (according to Microsoft):
+- After the last on-premises change (`Set-RemoteMailbox`) or mailbox move, a full sync cycle plus 24 hours must
+  pass (for example a 6-hour sync means 30 hours in total).
+- After a mailbox move: first confirm that the move has completed and that the on-premises object is a
+  RemoteMailbox. Then wait until the post-move attributes have synchronized to Entra ID, and only then start the
+  24 hours. Converting too early can let writeback overwrite the correct remote-mailbox values in AD with stale
+  cloud recipient-type values.
+- The script cannot verify this.
+- Writeback to AD (Cloud Sync) exists only for CustomAttribute1-15, ExtensionCustomAttribute1-5, mail
+  (WindowsEmailAddress), proxyAddresses and the recipient type. Everything else (for example
+  HiddenFromAddressListsEnabled, forwarding, moderation) stays in the cloud only and reverts to the AD value after
+  a rollback.
+- Before moving a mailbox back on-premises (offboarding), run a Rollback first (`IsExchangeCloudManaged = $false`);
+  otherwise synchronization breaks during offboarding.
 
 **User Convert**:
-- Korisnik postaje cloud authoritative i promjene iz AD-a se više ne primjenjuju (Connect Sync bilježi event 6956).
-- Konverzija briše `IsExchangeCloudManaged` stanje.
-- Prijava i lozinka, prema Microsoftovoj dokumentaciji:
-  - korisnici federirani preko **AD FS nisu podržani**,
-  - korisnici ne smiju ovisiti o on-prem autentifikaciji lozinkom (LDAP bind, Kerberos s lozinkom),
-  - preporučena je passwordless autentifikacija (Windows Hello for Business s **Cloud Kerberos Trust**, FIDO2),
-  - kod third-party federacije AD račun i lozinku treba održavati ručno.
-- Svi mailboxovi moraju biti u EXO prije User SOA.
-- `onPremises*` atributi ostaju na cloud objektu i treba ih ručno održavati ako je potreban pristup on-prem
-  resursima.
+- The user becomes cloud authoritative and changes from AD are no longer applied (Connect Sync logs event 6956).
+- The conversion clears the `IsExchangeCloudManaged` state.
+- Sign-in and password, according to Microsoft's documentation:
+  - users federated through **AD FS are not supported**,
+  - users must not depend on on-premises password authentication (LDAP bind, Kerberos with a password),
+  - passwordless authentication is recommended (Windows Hello for Business with **Cloud Kerberos Trust**, FIDO2),
+  - with third-party federation, the AD account and password must be maintained manually.
+- All mailboxes must be in EXO before User SOA.
+- The `onPremises*` attributes stay on the cloud object and must be maintained manually if access to on-premises
+  resources is still needed.
 
-**Group Convert**: SOA se ne prenosi na ugniježđene grupe. DL i MESG se nakon konverzije uređuju samo u EXO i
-nemaju writeback u AD. `extensionAttribute1-15` nisu podržani na konvertiranim grupama.
+**Group Convert**: SOA is not inherited by nested groups. Distribution groups and mail-enabled security groups are
+then managed only in EXO and have no writeback to AD. `extensionAttribute1-15` are not supported on converted
+groups.
 
-**Contact Convert**: potreban je Connect Sync 2.5.79.0+.
+**Contact Convert**: requires Connect Sync 2.5.79.0+.
 
-**Rollback (sve kategorije)**: sljedeći sync prepisuje cloud vrijednosti vrijednostima iz AD-a. Ono što treba
-sačuvati nalazi se u backup CSV-u (putanja se ispisuje). Skripta ne vraća atribute automatski. Rollback je gotov
-tek nakon sljedećeg Connect Sync ciklusa.
+**Rollback (all categories)**: the next sync overwrites the cloud values with the values from AD. Values worth
+keeping are in the backup CSV (the path is printed). The script does not restore attributes automatically. The
+rollback is complete only after the next Connect Sync cycle.
 
-**User Rollback, dodatno**: prema Microsoftu, prije user rollbacka treba isključiti tenant feature
-`blockCloudObjectTakeoverThroughHardMatchEnabled`
-(`PATCH /beta/directory/onPremisesSynchronization/{id}`), a nakon što Connect Sync preuzme objekt treba ga
-ponovno uključiti. To je tenant-wide postavka, pa je skripta **ne mijenja**, nego samo upozorava. Također treba
-ukloniti cloud reference (članstva u konvertiranim grupama, access packages).
+**User Rollback, additionally**: according to Microsoft, the tenant feature
+`blockCloudObjectTakeoverThroughHardMatchEnabled` must be disabled before a user rollback
+(`PATCH /beta/directory/onPremisesSynchronization/{id}`) and re-enabled after Connect Sync has taken over the
+object. This is a tenant-wide setting, so the script does **not** change it; it only warns. Cloud references
+(memberships in converted groups, access packages) must also be removed.
 
-## Razlike između zahtjeva i Microsoftove dokumentacije
+## Notes from the Microsoft documentation
 
-Provjereno na learn.microsoft.com 29. 10. 2026:
-- *Cloud-based management of Exchange attributes for Remote Mailboxes in hybrid environments* (ažurirano
+Checked on learn.microsoft.com on 29 October 2026:
+- *Cloud-based management of Exchange attributes for Remote Mailboxes in hybrid environments* (updated
   2026-09-28),
 - *Configure user SOA* (2026-04-15), *Configure Group SOA* (2025-11-19), *Transfer user SOA* (2026-09-24),
-- Graph *Get/Update onPremisesSyncBehavior* i *onPremisesSyncBehavior resource type*,
-- *Decommission the last Exchange Server after transferring SOA to cloud*.
+- Graph *Get/Update onPremisesSyncBehavior* and *onPremisesSyncBehavior resource type*,
+- *Decommission the last Exchange Server after transferring SOA to cloud*,
+- *Microsoft Entra built-in roles* and *Entra Connect: Accounts and permissions* (Directory Synchronization
+  Accounts role).
 
-Microsoftov blog na techcommunity.microsoft.com nije bio dostupan, ali službena Exchange stranica pokriva sve
-što je bilo potrebno.
+The Microsoft blog on techcommunity.microsoft.com was not reachable, but the official Exchange page covers
+everything that was needed.
 
-1. **v1.0 ili beta.** Entra how-to članci (User/Group/Contact SOA) koriste `https://graph.microsoft.com/v1.0/...`.
-   Graph API referenca dokumentira `onPremisesSyncBehavior` (get/update/resource) **samo pod beta**; i kad se na
-   learn.microsoft.com odabere v1.0, stranica prikazuje beta sadržaj.
-   Skripta koristi v1.0, a ako v1.0 vrati *"Resource not found for the segment"*, automatski prelazi na beta za
-   SOA endpoint. U logu se ispisuje koja je verzija korištena.
-2. **Stanje nakon konverzije.** `onPremisesSyncEnabled` nakon konverzije **ne** ostaje `true`, nego postaje
-   **`null`**. Microsoftova tablica:
+1. **v1.0 or beta.** The Entra how-to articles (User/Group/Contact SOA) use `https://graph.microsoft.com/v1.0/...`.
+   The Graph API reference documents `onPremisesSyncBehavior` (get/update/resource) **under beta only**; even when
+   v1.0 is selected on learn.microsoft.com, the page shows the beta content. The script uses v1.0 and switches to
+   beta for the SOA endpoint only if v1.0 returns *"Resource not found for the segment"*. The log shows which
+   version was used.
+2. **State after conversion.** `onPremisesSyncEnabled` does **not** stay `true` after the conversion; it becomes
+   **`null`**. Microsoft's table:
 
-   | Korak | isCloudManaged | onPremisesSyncEnabled |
+   | Step | isCloudManaged | onPremisesSyncEnabled |
    |---|---|---|
-   | Objekt sinkroniziran iz AD-a | false | true |
-   | SOA prebačen u cloud | true | null |
-   | Rollback | false | null (dok sync klijent ne preuzme objekt) |
-   | Cloud-native objekt | false | null |
+   | Object synchronized from AD | false | true |
+   | SOA transferred to the cloud | true | null |
+   | Rollback | false | null (until the sync client takes over the object) |
+   | Cloud-native object | false | null |
 
-   Posljedice: Inventory bez CSV-a ne vidi konvertirane objekte, Verify se oslanja isključivo na `isCloudManaged`,
-   a rollback i cloud-native objekt izgledaju isto dok sync ne preuzme objekt (stanje `NotSynced`).
-3. **`$select` i `$expand`.** GET `onPremisesSyncBehavior` prema API referenci **ne podržava query parametre**
-   (Entra članci ipak koriste `?$select=isCloudManaged`). Skripta zato ne šalje `$select`; odgovor ionako sadrži
-   samo `id` i `isCloudManaged`. `$expand` na list upitima nije dokumentiran, a advanced queries ionako ne
-   podržavaju `$expand`. Beta dokumentira samo `$filter=onPremisesSyncBehavior/isCloudManaged eq true` uz
-   advanced query, a to ne daje vrijednost po objektu. Zato se `isCloudManaged` čita po objektu.
-4. **Lozinka i prijava nakon User SOA.** Dokumentacija ne opisuje izričito što se događa s password hash syncom.
-   Navodi preduvjete: bez AD FS federacije, bez aplikacija s autentifikacijom lozinkom, passwordless s Cloud
-   Kerberos Trust. Upozorenje u skripti prenosi upravo to i preporučuje test s pilot korisnikom.
-5. **User rollback** traži isključivanje `blockCloudObjectTakeoverThroughHardMatchEnabled` (tenant-wide), što
-   zahtjev ne spominje. Skripta tu postavku ne dira.
-6. **Grupe:** prije rollbacka treba ukloniti cloud članove. Skripta takve grupe preskače. Na konvertiranim
-   grupama nisu podržani `extensionAttribute1-15`. DL i MESG se nakon konverzije ne mogu uređivati kroz Graph ni
-   Entra admin center, nego samo u EXO.
-7. **Verzije Connect Synca:** minimalno 2.5.76.0 (User/Group) i 2.5.79.0 (Contact).
-8. **ExchangeAttributes: zahtjev je potvrđen.** Dokumentacija potvrđuje:
-   - pravilo sync ciklus + 24 h (uz dodatna pravila za premještanje mailboxa, vidi *Upozorenja*),
-   - da se `-IsExchangeCloudManaged` *"should not be used together with any other parameters"*,
-   - da certificate-based app-only nije podržan (*"an app-only session doesn't provide the delegated user
+   Consequences: Inventory without a CSV does not see converted objects, Verify relies only on `isCloudManaged`,
+   and a rollback looks the same as a cloud-native object until sync takes over the object (state `NotSynced`).
+3. **`$select` and `$expand`.** According to the API reference, GET `onPremisesSyncBehavior` **does not support
+   query parameters** (the Entra articles still use `?$select=isCloudManaged`). The script therefore does not send
+   `$select`; the response contains only `id` and `isCloudManaged` anyway. `$expand` on list queries is not
+   documented, and advanced queries do not support `$expand`. Beta documents only
+   `$filter=onPremisesSyncBehavior/isCloudManaged eq true` with an advanced query, which does not return the value
+   per object. That is why `isCloudManaged` is read per object.
+4. **Password and sign-in after User SOA.** The documentation does not explicitly describe what happens to
+   password hash sync. It lists the prerequisites: no AD FS federation, no applications that authenticate with a
+   password, passwordless with Cloud Kerberos Trust. The script's warning repeats exactly that and recommends a
+   test with a pilot user.
+5. **User rollback** requires disabling `blockCloudObjectTakeoverThroughHardMatchEnabled` (tenant-wide). The script
+   does not touch that setting.
+6. **Groups:** cloud members must be removed before a rollback; the script skips such groups. `extensionAttribute1-15`
+   are not supported on converted groups. Distribution groups and mail-enabled security groups cannot be edited
+   through Graph or the Entra admin center after the conversion, only in EXO.
+7. **Connect Sync versions:** at least 2.5.76.0 (User/Group) and 2.5.79.0 (Contact).
+8. **ExchangeAttributes.** The documentation confirms:
+   - the sync cycle + 24 h rule (with extra rules for mailbox moves, see *Warnings*),
+   - that `-IsExchangeCloudManaged` *"should not be used together with any other parameters"*,
+   - that certificate-based app-only is not supported (*"an app-only session doesn't provide the delegated user
      authorization required to update the IsExchangeCloudManaged property in Microsoft Entra ID"*),
-   - da User SOA *"clears the user's IsExchangeCloudManaged state"*.
+   - that User SOA *"clears the user's IsExchangeCloudManaged state"*.
 
-   Dodatno iz dokumentacije:
-   - zastavica vrijedi samo za mailboxove korisnika s `IsDirSynced = true`; za mail-enabled grupe i mail
-     kontakte koristi se Group/Contact SOA,
-   - nakon User SOA `IsDirSynced` postaje `False` (skripta takav mailbox prikazuje kao `NotSynced`),
-   - writeback u AD radi samo za dio atributa (vidi *Upozorenja*).
+   Also from the documentation:
+   - the flag applies only to mailboxes of users with `IsDirSynced = true`; mail-enabled groups and mail contacts
+     use Group/Contact SOA,
+   - after User SOA `IsDirSynced` becomes `False` (the script shows such a mailbox as `NotSynced`),
+   - writeback to AD covers only some attributes (see *Warnings*).
 
-   Microsoftovi primjeri koriste `-Identity <User>` / `Alias`. Dokumentacija ne navodi izričito da `-Identity`
-   prihvaća `ExternalDirectoryObjectId`. Skripta ga koristi kako je traženo, a automatski Verify potvrđuje
-   promjenu. Ako EXO ne razriješi ObjectId, objekt završava kao `Failed` i ništa se ne mijenja; to se vidi već
-   na pilotu s `-MaxObjects 1`.
+   Microsoft's examples use `-Identity <User>` / `Alias`; the documentation does not say explicitly that
+   `-Identity` accepts `ExternalDirectoryObjectId`. The script uses it as specified, and it worked in testing
+   against a real tenant.
 
-## Testiranje
+## Testing
 
-Skripta je testirana samo protiv lažnih (stub) `Microsoft.Graph.Authentication` i `ExchangeOnlineManagement`
-modula. Testirano je: Inventory (sve kategorije), Convert, Rollback, Verify, `-WhatIf`, `-MaxObjects`, neslaganje
-kategorije, CSV koji nije UTF-16, otkazivanje, retry na 429, prelazak v1.0 → beta, greška na jednom objektu
-dok ostali nastavljaju, i neuspjeli verify. **Nije testirana protiv pravog tenanta** i PSScriptAnalyzer nije
-pokrenut. Prije produkcije pokrenite PSScriptAnalyzer i slijedite redoslijed iznad, s jednim pilot objektom.
+- **Stub modules:** Inventory (all categories), Convert, Rollback, Verify, `-WhatIf`, `-MaxObjects`, category
+  mismatch, non-UTF-16 CSV, cancellation, retry on 429, the v1.0 → beta fallback, an error on one object while
+  the others continue, a failed verify, the PowerShell version check, module installation, and protected system
+  objects.
+- **Real tenant (in progress):** inventory for all categories, input validation, `-WhatIf`, Convert and Rollback
+  for a test mailbox (ExchangeAttributes, including writeback), nested security groups, a distribution group and a
+  mail-enabled security group. Graph v1.0 works for `onPremisesSyncBehavior` in that tenant.
+- **Not yet tested:** Contact and User against a real tenant, Windows PowerShell 5.1 (the version message), and
+  PSScriptAnalyzer. Run PSScriptAnalyzer before production and follow the order above, starting with one pilot
+  object.
