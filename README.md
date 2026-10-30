@@ -123,6 +123,67 @@ The *Directory Synchronization Accounts* role is Microsoft's recommended way to 
 broad. The lists are at the top of the script (`$ProtectedNamePatterns`, `$ProtectedGroupNames`) and can be
 extended if you find another system account.
 
+## Which scenario to use
+
+| Scenario | Convert | Do NOT convert |
+|---|---|---|
+| **Remove on-premises Exchange** (AD stays the source for identities) | Exchange attributes of mailboxes, distribution groups (DL), mail-enabled security groups (MESG), mail contacts | users, security groups (not mail-enabled) |
+| **Cloud only** (the customer wants to remove AD completely) | users, security groups, DL, MESG, mail contacts | Exchange attributes of mailboxes, because the User conversion covers them |
+
+Users and security groups are converted **only** in the cloud-only scenario. A User conversion moves the whole
+user object to the cloud, including the Exchange attributes of the mailbox (Microsoft: User SOA *"clears the
+user's IsExchangeCloudManaged state"*), so the ExchangeAttributes conversion is not needed in that scenario. Just
+removing Exchange does not require a User conversion; it also affects sign-in and passwords, because AD no longer
+manages the user.
+
+In the cloud-only scenario, shared, room and equipment mailboxes must also be in the User CSV, because they have a
+user object in AD as well. A phased approach is fine too: if Exchange is removed first (ExchangeAttributes) and the
+customer moves to cloud only later (User), the User conversion simply clears `IsExchangeCloudManaged`.
+
+### Commands for removing Exchange
+
+For groups, **always specify `-GroupType`**. The default is `All`, which includes security groups.
+
+Inventory:
+
+```powershell
+.\Invoke-SoaConversion.ps1 -Action Inventory -Category ExchangeAttributes
+.\Invoke-SoaConversion.ps1 -Action Inventory -Category Group -GroupType Distribution
+.\Invoke-SoaConversion.ps1 -Action Inventory -Category Group -GroupType MailEnabledSecurity
+.\Invoke-SoaConversion.ps1 -Action Inventory -Category Contact
+```
+
+Review the CSV files in the output folders and delete the rows you do not want to convert.
+
+Convert, in the same order for every category: `-WhatIf`, then one pilot object, then the rest:
+
+```powershell
+.\Invoke-SoaConversion.ps1 -Action Convert -Category ExchangeAttributes -InputCsv .\mailboxes.csv -WhatIf
+.\Invoke-SoaConversion.ps1 -Action Convert -Category ExchangeAttributes -InputCsv .\mailboxes.csv -MaxObjects 1
+.\Invoke-SoaConversion.ps1 -Action Convert -Category ExchangeAttributes -InputCsv .\mailboxes.csv
+```
+```powershell
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Group -GroupType Distribution -InputCsv .\dl.csv -WhatIf
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Group -GroupType Distribution -InputCsv .\dl.csv -MaxObjects 1
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Group -GroupType Distribution -InputCsv .\dl.csv
+```
+```powershell
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Group -GroupType MailEnabledSecurity -InputCsv .\mesg.csv -WhatIf
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Group -GroupType MailEnabledSecurity -InputCsv .\mesg.csv -MaxObjects 1
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Group -GroupType MailEnabledSecurity -InputCsv .\mesg.csv
+```
+```powershell
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Contact -InputCsv .\contacts.csv -WhatIf
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Contact -InputCsv .\contacts.csv -MaxObjects 1
+.\Invoke-SoaConversion.ps1 -Action Convert -Category Contact -InputCsv .\contacts.csv
+```
+
+Notes:
+- For mailboxes that were migrated or changed on-premises (`Set-RemoteMailbox`) recently, Microsoft requires a sync
+  cycle plus 24 hours before the conversion. This does not apply to mailboxes migrated several days ago.
+- After the conversion, DLs, MESGs and contacts are managed only in EXO and have no writeback to AD.
+- Writeback of mailbox Exchange attributes to AD requires Cloud Sync (*EXO to AD attribute sync*).
+
 ## Recommended order of work
 
 1. **Inventory**: `.\Invoke-SoaConversion.ps1 -Action Inventory -Category Group -GroupType Security`
